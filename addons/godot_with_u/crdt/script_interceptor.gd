@@ -1,6 +1,7 @@
 @tool
 class_name ScriptInterceptor
 extends RefCounted
+
 ## Hooks into Godot's ScriptEditor to intercept text changes in the
 ## active CodeEdit, feeds them through a CRDTTextBuffer, and applies
 ## incoming remote CRDT operations with caret preservation.

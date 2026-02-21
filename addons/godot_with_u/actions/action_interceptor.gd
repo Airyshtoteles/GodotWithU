@@ -1,6 +1,7 @@
 @tool
 class_name ActionInterceptor
 extends RefCounted
+
 ## Hooks into Godot Editor signals to detect user actions and emit them
 ## as serializable Dictionary packets via the `action_captured` signal.
 ##
@@ -12,10 +13,10 @@ extends RefCounted
 ## Godot Editor instances. The .godot/ script cache may keep the old
 ## version of this file loaded in memory until a full restart.
 
-signal action_captured(action: Dictionary)
-
 const TAG := "ActionInterceptor"
 const LOCK_SUFFIX := " 🔒"
+
+signal action_captured(action: Dictionary)
 
 # ── References ───────────────────────────────────────────────────────
 var _editor_plugin: EditorPlugin
@@ -192,7 +193,7 @@ func _on_node_removed(node: Node) -> void:
 	_emit(action)
 
 
-func _on_inspector_property_changed(undo_redo: Object, modified_object: Object,
+func _on_inspector_property_changed(_undo_redo: Object, modified_object: Object,
 		property: String, new_value: Variant) -> bool:
 	if _suppress: return false
 	if not (modified_object is Node): return false
@@ -248,7 +249,7 @@ func apply_remote_action(action: Dictionary) -> void:
 	_suppress = false
 
 
-func _apply_select(action: Dictionary, root: Node) -> void:
+func _apply_select(action: Dictionary, _root: Node) -> void:
 	var paths: Array = action.get("data", {}).get("paths", [])
 	var peer_id: String = action.get("peer_id", "")
 

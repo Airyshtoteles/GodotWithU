@@ -166,7 +166,9 @@ func _send_packet(packet: PackedByteArray) -> void:
 		print("[%s] SEND: %d bytes" % [PLUGIN_NAME, packet.size()])
 		_network_manager.broadcast_packet(packet)
 	else:
-		print("[%s] SEND SKIPPED: mode='%s' network_manager=%s" % [PLUGIN_NAME, _mode, _network_manager != null])
+		print("[%s] SEND SKIPPED: mode='%s' network_manager=%s" % [
+			PLUGIN_NAME, _mode, _network_manager != null
+		])
 
 
 func _on_relay_message(data: PackedByteArray) -> void:

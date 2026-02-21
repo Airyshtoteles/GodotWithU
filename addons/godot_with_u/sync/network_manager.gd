@@ -1,20 +1,20 @@
 @tool
-extends RefCounted
 class_name NetworkManager
+extends RefCounted
 
 ## network_manager.gd
 ##
 ## A pure GDScript networking layer for GodotWithU Editor collaboration.
-## Replaces the C++ NetworkBridge. Uses Godot's built-in ENetMultiplayerPeer 
-## independently from the SceneTree multiplayer API, making it perfectly safe 
+## Replaces the C++ NetworkBridge. Uses Godot's built-in ENetMultiplayerPeer
+## independently from the SceneTree multiplayer API, making it perfectly safe
 ## for an EditorPlugin while handling framing, peers, and reliable delivery natively.
+
+signal peer_connected(id: int)
+signal peer_disconnected(id: int)
 
 var _peer: ENetMultiplayerPeer = null
 var _is_server: bool = false
 var _clients: Array[int] = []
-
-signal peer_connected(id: int)
-signal peer_disconnected(id: int)
 
 func host(port: int) -> Error:
 	stop()
@@ -50,7 +50,7 @@ func stop() -> void:
 func broadcast_packet(packet: PackedByteArray) -> void:
 	if not _peer or _peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
 		return
-	
+
 	# MultiplayerPeer constant 0 means "broadcast to all connected peers".
 	# For host, this sends to all clients. For client, this sends to the host.
 	_peer.set_target_peer(0)
@@ -60,16 +60,16 @@ func broadcast_packet(packet: PackedByteArray) -> void:
 func poll_messages() -> Array[PackedByteArray]:
 	if not _peer:
 		return []
-		
+
 	# Process network events (connections, disconnections, incoming packets)
 	_peer.poll()
-	
+
 	var received: Array[PackedByteArray] = []
-	
+
 	while _peer.get_available_packet_count() > 0:
 		var peer_id: int = _peer.get_packet_peer()
 		var packet: PackedByteArray = _peer.get_packet()
-		
+
 		# If we are the host (server), we act as a relay for the "Multiuser" topology.
 		# When a client sends a packet to the host, the host must bounce it to all OTHER clients.
 		if _is_server:
@@ -78,9 +78,9 @@ func poll_messages() -> Array[PackedByteArray]:
 					_peer.set_target_peer(client_id)
 					_peer.set_transfer_mode(MultiplayerPeer.TRANSFER_MODE_RELIABLE)
 					_peer.put_packet(packet)
-					
+
 		received.append(packet)
-		
+
 	return received
 
 func _on_peer_connected(id: int) -> void:

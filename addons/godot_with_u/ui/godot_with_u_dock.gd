@@ -1,6 +1,7 @@
 @tool
 class_name GodotWithUDock
 extends Control
+
 ## Editor Dock panel — Host/Join local relay or connect via BitChat P2P.
 
 const TAG := "GodotWithUDock"

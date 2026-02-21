@@ -165,10 +165,10 @@ func _alloc_position_between(before: Array, after: Array) -> Array:
 			# There's room at this level — pick the midpoint
 			result.append(b + (a - b) / 2)
 			return result
-		else:
-			# No room — descend one level deeper
-			result.append(b)
-			depth += 1
+
+		# No room — descend one level deeper
+		result.append(b)
+		depth += 1
 
 	# Fallback: extend with a midpoint at the next level (should rarely hit)
 	result.append(BASE / 2)
@@ -202,7 +202,7 @@ func _compare_atoms(a: Dictionary, b: Dictionary) -> int:
 	# Tiebreak by site_id (lexicographic) — deterministic across all peers
 	if a["site"] < b["site"]:
 		return -1
-	elif a["site"] > b["site"]:
+	if a["site"] > b["site"]:
 		return 1
 	# Final tiebreak by clock
 	return a["clock"] - b["clock"]
@@ -223,7 +223,7 @@ func _compare_positions(a: Array, b: Array) -> int:
 	# If all compared elements are equal, shorter array comes first
 	if len_a < len_b:
 		return -1
-	elif len_a > len_b:
+	if len_a > len_b:
 		return 1
 	return 0
 
