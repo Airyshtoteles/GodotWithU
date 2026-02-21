@@ -1,0 +1,7 @@
+[submodule "gdextension/bitchat"]
+	path = gdextension/bitchat
+	url = https://github.com/Airyshtoteles/BitChat
+[submodule "gdextension/godot-cpp"]
+	path = gdextension/godot-cpp
+	url = https://github.com/godotengine/godot-cpp
+	branch = 4.5

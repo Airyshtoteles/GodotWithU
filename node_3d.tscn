@@ -1,0 +1,14 @@
+[gd_scene format=3 uid="uid://bu6un4jun41vo"]
+
+[node name="Node3D" type="Node3D" unique_id=328934789]
+
+[node name="CSGSphere3D" type="CSGSphere3D" parent="." unique_id=1948162524]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.92829037, 1.0347126, 0)
+
+[node name="CSGSphere3D2" type="CSGSphere3D" parent="." unique_id=1277953227]
+
+[node name="CSGSphere3D3" type="CSGSphere3D" parent="." unique_id=1209993523]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0433487, 1.8044791, 0.36896324)
+
+[node name="CSGSphere3D4" type="CSGSphere3D" parent="." unique_id=1845120594]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.20628262, 2.714924, 2.1124907)
