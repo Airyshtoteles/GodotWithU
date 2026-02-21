@@ -18,8 +18,8 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install gdscript-toolkit
-        run: pip install gdscript-toolkit
+      - name: Install gdtoolkit
+        run: pip install gdtoolkit
 
       - name: Run gdlint on addons
         run: gdlint addons/godot_with_u/
