@@ -217,7 +217,7 @@ func _compare_positions(a: Array, b: Array) -> int:
 	for i in range(min_len):
 		if a[i] < b[i]:
 			return -1
-		elif a[i] > b[i]:
+		if a[i] > b[i]:
 			return 1
 
 	# If all compared elements are equal, shorter array comes first

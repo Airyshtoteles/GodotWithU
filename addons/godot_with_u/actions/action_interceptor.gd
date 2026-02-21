@@ -13,10 +13,11 @@ extends RefCounted
 ## Godot Editor instances. The .godot/ script cache may keep the old
 ## version of this file loaded in memory until a full restart.
 
+signal action_captured(action: Dictionary)
+
 const TAG := "ActionInterceptor"
 const LOCK_SUFFIX := " 🔒"
-
-signal action_captured(action: Dictionary)
+const TRANSFORM_POLL_SEC := 0.1
 
 # ── References ───────────────────────────────────────────────────────
 var _editor_plugin: EditorPlugin
@@ -38,7 +39,6 @@ var _remote_changed_paths: Dictionary = {}   ## rel_path → true
 # ── Transform polling (viewport drag detection) ─────────────────────
 var _transform_cache: Dictionary = {}   ## rel_path → Transform3D or Transform2D
 var _poll_timer: Timer = null
-const TRANSFORM_POLL_SEC := 0.1
 
 
 # ═════════════════════════════════════════════════════════════════════

@@ -4,6 +4,10 @@ extends Control
 
 ## Editor Dock panel — Host/Join local relay or connect via BitChat P2P.
 
+signal host_requested(port: int)
+signal join_requested(port: int)
+signal stop_requested()
+
 const TAG := "GodotWithUDock"
 
 var _status_label: Label
@@ -13,10 +17,6 @@ var _join_btn: Button
 var _stop_btn: Button
 var _port_input: SpinBox
 var _info_label: Label
-
-signal host_requested(port: int)
-signal join_requested(port: int)
-signal stop_requested()
 
 
 func _init() -> void:

@@ -15,6 +15,7 @@ extends RefCounted
 signal crdt_op_generated(op: Dictionary, script_path: String)
 
 const TAG := "ScriptInterceptor"
+const CHECK_INTERVAL_SEC := 0.5
 
 # ── References ───────────────────────────────────────────────────────
 var _editor_plugin: EditorPlugin
@@ -33,7 +34,6 @@ var _suppress: bool = false
 
 # ── Polling timer for detecting active editor changes ───────────────
 var _check_timer: Timer = null
-const CHECK_INTERVAL_SEC := 0.5
 
 
 # ═════════════════════════════════════════════════════════════════════
