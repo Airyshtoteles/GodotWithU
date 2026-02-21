@@ -1,0 +1,19 @@
+# Godot 4+ specific ignores
+.godot/
+*.translation
+export_presets.cfg
+*.import
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+bin/
+*.dll
+*.so
+*.dylib
+*.a
+*.obj
+*.o
+*.pck

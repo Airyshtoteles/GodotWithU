@@ -1,0 +1,26 @@
+name: Release Plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Zip Addon
+        run: |
+          mkdir -p release
+          cd addons
+          zip -r ../release/GodotWithU.zip godot_with_u/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/GodotWithU.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
