@@ -12,6 +12,9 @@ extends RefCounted
 signal peer_connected(id: int)
 signal peer_disconnected(id: int)
 
+## Maximum allowed packet size (8 MB). Packets larger than this are dropped.
+const MAX_PACKET_SIZE := 8 * 1024 * 1024
+
 var _peer: ENetMultiplayerPeer = null
 var _is_server: bool = false
 var _clients: Array[int] = []
@@ -69,6 +72,14 @@ func poll_messages() -> Array[PackedByteArray]:
 	while _peer.get_available_packet_count() > 0:
 		var peer_id: int = _peer.get_packet_peer()
 		var packet: PackedByteArray = _peer.get_packet()
+
+		# Drop oversized packets to prevent memory exhaustion
+		if packet.size() > MAX_PACKET_SIZE:
+			push_warning(
+				"[NetworkManager] Dropped oversized packet: %d bytes from peer %d"
+				% [packet.size(), peer_id]
+			)
+			continue
 
 		# If we are the host (server), we act as a relay for the "Multiuser" topology.
 		# When a client sends a packet to the host, the host must bounce it to all OTHER clients.

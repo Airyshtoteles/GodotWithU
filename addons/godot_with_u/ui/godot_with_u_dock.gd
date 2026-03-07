@@ -5,7 +5,7 @@ extends Control
 ## Editor Dock panel — Host/Join local relay or connect via BitChat P2P.
 
 signal host_requested(port: int)
-signal join_requested(port: int)
+signal join_requested(ip: String, port: int)
 signal stop_requested()
 
 const TAG := "GodotWithUDock"
@@ -16,6 +16,7 @@ var _host_btn: Button
 var _join_btn: Button
 var _stop_btn: Button
 var _port_input: SpinBox
+var _ip_input: LineEdit
 var _info_label: Label
 
 
@@ -56,6 +57,18 @@ func _build_ui() -> void:
 	_port_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ph.add_child(_port_input)
 
+	# IP Address (for Join)
+	var ih := HBoxContainer.new()
+	main.add_child(ih)
+	var il := Label.new()
+	il.text = "IP:"
+	ih.add_child(il)
+	_ip_input = LineEdit.new()
+	_ip_input.text = "127.0.0.1"
+	_ip_input.placeholder_text = "Host IP address"
+	_ip_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ih.add_child(_ip_input)
+
 	# Buttons
 	var bh := HBoxContainer.new()
 	bh.add_theme_constant_override("separation", 4)
@@ -70,7 +83,11 @@ func _build_ui() -> void:
 	_join_btn = Button.new()
 	_join_btn.text = "Join"
 	_join_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_join_btn.pressed.connect(func(): join_requested.emit(int(_port_input.value)))
+	_join_btn.pressed.connect(
+		func(): join_requested.emit(
+			_ip_input.text.strip_edges(), int(_port_input.value)
+		)
+	)
 	bh.add_child(_join_btn)
 
 	_stop_btn = Button.new()
@@ -111,6 +128,7 @@ func set_connected(mode: String) -> void:
 	_join_btn.disabled = true
 	_stop_btn.disabled = false
 	_port_input.editable = false
+	_ip_input.editable = false
 	_status_label.text = "Status: %s" % mode
 	_status_label.add_theme_color_override("font_color", Color.GREEN)
 
@@ -120,6 +138,7 @@ func set_disconnected() -> void:
 	_join_btn.disabled = false
 	_stop_btn.disabled = true
 	_port_input.editable = true
+	_ip_input.editable = true
 	_status_label.text = "Status: Offline"
 	_status_label.add_theme_color_override("font_color", Color.GRAY)
 	if _peer_list:

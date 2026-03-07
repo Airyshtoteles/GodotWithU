@@ -19,6 +19,27 @@ const TAG := "ActionInterceptor"
 const LOCK_SUFFIX := " 🔒"
 const TRANSFORM_POLL_SEC := 0.1
 
+## Allowed base classes for remote node instantiation. Only types that
+## inherit from one of these will be accepted from the network.
+const SAFE_NODE_BASES: Array[String] = [
+	"Node", "Node2D", "Node3D", "Control", "Camera2D", "Camera3D",
+	"Light2D", "Light3D", "MeshInstance3D", "MeshInstance2D",
+	"CollisionShape2D", "CollisionShape3D", "CollisionObject2D", "CollisionObject3D",
+	"StaticBody2D", "StaticBody3D", "RigidBody2D", "RigidBody3D",
+	"CharacterBody2D", "CharacterBody3D", "Area2D", "Area3D",
+	"Sprite2D", "Sprite3D", "AnimatedSprite2D", "AnimatedSprite3D",
+	"AnimationPlayer", "AnimationTree", "Timer", "AudioStreamPlayer",
+	"AudioStreamPlayer2D", "AudioStreamPlayer3D", "GPUParticles2D", "GPUParticles3D",
+	"CPUParticles2D", "CPUParticles3D", "RayCast2D", "RayCast3D",
+	"Path2D", "Path3D", "PathFollow2D", "PathFollow3D",
+	"CanvasLayer", "SubViewport", "SubViewportContainer",
+	"Label", "Button", "LineEdit", "TextEdit", "Panel",
+	"HBoxContainer", "VBoxContainer", "GridContainer", "MarginContainer",
+	"CSGBox3D", "CSGSphere3D", "CSGCylinder3D", "CSGMesh3D", "CSGCombiner3D",
+	"DirectionalLight3D", "OmniLight3D", "SpotLight3D",
+	"WorldEnvironment", "NavigationRegion2D", "NavigationRegion3D",
+]
+
 # ── References ───────────────────────────────────────────────────────
 var _editor_plugin: EditorPlugin
 var _editor_selection: EditorSelection
@@ -323,6 +344,11 @@ func _apply_node_add(action: Dictionary, root: Node) -> void:
 	if parent.has_node(NodePath(node_name)):
 		return
 
+	# Validate node type against whitelist
+	if not _is_safe_node_type(node_type):
+		push_warning("[%s] Blocked unsafe node type from network: %s" % [TAG, node_type])
+		return
+
 	var new_node: Node = ClassDB.instantiate(StringName(node_type))
 	if not new_node:
 		push_warning("[%s] Cannot instantiate: %s" % [TAG, node_type])
@@ -516,3 +542,16 @@ func _collect_children(node: Node, root: Node, result: Array[Node]) -> void:
 		if child.owner == root:
 			result.append(child)
 			_collect_children(child, root, result)
+
+
+## Check if a node type is safe to instantiate from a remote request.
+## Returns true if the type is in the whitelist or inherits from a whitelisted class.
+static func _is_safe_node_type(type_name: String) -> bool:
+	if not ClassDB.class_exists(StringName(type_name)):
+		return false
+	for safe_base in SAFE_NODE_BASES:
+		var sn := StringName(type_name)
+		var sb := StringName(safe_base)
+		if type_name == safe_base or ClassDB.is_parent_class(sn, sb):
+			return true
+	return false

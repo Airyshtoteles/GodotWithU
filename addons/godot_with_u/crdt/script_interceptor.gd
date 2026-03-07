@@ -67,6 +67,40 @@ func teardown() -> void:
 	print("[%s] Torn down." % TAG)
 
 
+## Export all CRDT buffer states for initial sync to a joining peer.
+func export_all_buffers() -> Dictionary:
+	var result: Dictionary = {}
+	for script_path in _buffers:
+		var buf: CRDTTextBuffer = _buffers[script_path]
+		result[script_path] = buf.export_state()
+	return result
+
+
+## Import CRDT buffer states received from the host during initial sync.
+func import_buffer_state(script_path: String, state: Dictionary) -> void:
+	var buf: CRDTTextBuffer
+	if _buffers.has(script_path):
+		buf = _buffers[script_path]
+	else:
+		buf = CRDTTextBuffer.new()
+		buf.init(_site_id)
+		_buffers[script_path] = buf
+	buf.import_state(state)
+
+	# If this script is currently active, update the CodeEdit
+	if script_path == _active_script_path \
+			and _active_code_edit \
+			and is_instance_valid(_active_code_edit):
+		_suppress = true
+		var caret_line := _active_code_edit.get_caret_line()
+		var caret_col := _active_code_edit.get_caret_column()
+		_active_code_edit.text = buf.get_text()
+		_cached_text = buf.get_text()
+		_active_code_edit.set_caret_line(caret_line)
+		_active_code_edit.set_caret_column(caret_col)
+		_suppress = false
+
+
 # ═════════════════════════════════════════════════════════════════════
 #  Active CodeEdit Detection
 # ═════════════════════════════════════════════════════════════════════
@@ -239,9 +273,6 @@ func apply_remote_op(op: Dictionary, script_path: String) -> void:
 
 	var op_type: String = op.get("op", "")
 	if op_type == "insert":
-		var pos := _flat_to_line_col(_cached_text, doc_index)
-		_active_code_edit.insert_text_at_caret(op["char"])
-		# Actually, we need to set the full text to be safe
 		var new_full_text := buf.get_text()
 		_active_code_edit.text = new_full_text
 		_cached_text = new_full_text

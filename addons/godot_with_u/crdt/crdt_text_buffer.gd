@@ -99,6 +99,19 @@ func local_delete(idx: int) -> Dictionary:
 ## Apply a remote insert. Returns the document index where it was placed,
 ## or -1 if it was a duplicate (already exists).
 func remote_insert(op: Dictionary) -> int:
+	# Validate required fields
+	if not op.has("pos") or not op.has("site") or not op.has("clock") or not op.has("char"):
+		push_warning("[%s] Invalid remote insert op: missing fields" % TAG)
+		return -1
+	if not (op["pos"] is Array) or not (op["site"] is String) or not (op["char"] is String):
+		push_warning("[%s] Invalid remote insert op: wrong field types" % TAG)
+		return -1
+
+	# Advance local clock to stay ahead of all observed clocks
+	var remote_clock: int = op["clock"]
+	if remote_clock >= _clock:
+		_clock = remote_clock + 1
+
 	var new_atom := {
 		"pos": op["pos"],
 		"site": op["site"],
@@ -122,6 +135,16 @@ func remote_insert(op: Dictionary) -> int:
 ## Apply a remote delete. Returns the document index that was removed,
 ## or -1 if the atom was not found (already deleted / out of sync).
 func remote_delete(op: Dictionary) -> int:
+	# Validate required fields
+	if not op.has("site") or not op.has("clock"):
+		push_warning("[%s] Invalid remote delete op: missing fields" % TAG)
+		return -1
+
+	# Advance local clock to stay ahead of all observed clocks
+	var remote_clock: int = op.get("clock", 0)
+	if remote_clock >= _clock:
+		_clock = remote_clock + 1
+
 	for i in range(_atoms.size()):
 		var atom: Dictionary = _atoms[i]
 		if atom["site"] == op["site"] and atom["clock"] == op["clock"]:
@@ -143,6 +166,22 @@ func get_text() -> String:
 
 func get_length() -> int:
 	return _atoms.size()
+
+
+## Export the full buffer state for initial sync to a joining peer.
+func export_state() -> Dictionary:
+	return {
+		"atoms": _atoms.duplicate(true),
+		"clock": _clock,
+	}
+
+
+## Import a full buffer state received from the host during initial sync.
+func import_state(state: Dictionary) -> void:
+	_atoms = state.get("atoms", []).duplicate(true)
+	var remote_clock: int = state.get("clock", 0)
+	if remote_clock >= _clock:
+		_clock = remote_clock + 1
 
 
 # ═════════════════════════════════════════════════════════════════════

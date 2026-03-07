@@ -33,7 +33,7 @@ var _lock_manager: RefCounted = null
 var _lock_overlay: RefCounted = null
 var _script_sync: RefCounted = null
 var _dock: Control = null
-var _local_peer_id: String = "peer_%d" % (randi() % 9999)
+var _local_peer_id: String = "peer_%s" % str(randi()).sha256_text().substr(0, 8)
 var _mode: String = ""   # "host", "join", or ""
 
 
@@ -118,11 +118,14 @@ func _do_host(port: int) -> void:
 	print("[%s] Hosting on port %d — peer_id: %s" % [PLUGIN_NAME, port, _local_peer_id])
 
 
-func _do_join(port: int) -> void:
+func _do_join(ip: String, port: int) -> void:
 	if _mode != "": return
 
+	if ip.is_empty():
+		ip = "127.0.0.1"
+
 	_network_manager = NetworkManagerClass.new()
-	var err: int = _network_manager.join("127.0.0.1", port)
+	var err: int = _network_manager.join(ip, port)
 	if err != OK:
 		if _dock: _dock.set_disconnected()
 		_network_manager = null
@@ -133,10 +136,10 @@ func _do_join(port: int) -> void:
 	_mode = "join"
 
 	if _dock:
-		_dock.set_connected("Joined :%d" % port)
+		_dock.set_connected("Joined %s:%d" % [ip, port])
 		_dock.update_info("v%s • %s • joined" % [PLUGIN_VERSION, _local_peer_id])
 
-	print("[%s] Joined host on port %d — peer_id: %s" % [PLUGIN_NAME, port, _local_peer_id])
+	print("[%s] Joined host at %s:%d — peer_id: %s" % [PLUGIN_NAME, ip, port, _local_peer_id])
 
 
 func _do_stop() -> void:
@@ -159,6 +162,10 @@ func _process_network_tick() -> void:
 		var packets = _network_manager.poll_messages()
 		for packet in packets:
 			_on_relay_message(packet)
+
+	# Periodically check for timed-out locks
+	if _lock_manager:
+		_lock_manager.check_timeouts()
 
 
 func _send_packet(packet: PackedByteArray) -> void:
@@ -187,7 +194,13 @@ func _on_relay_message(data: PackedByteArray) -> void:
 		print("[%s] RECV: skipped own message" % PLUGIN_NAME)
 		return
 
-	match action.get("type", ""):
+	# Validate required fields
+	var action_type: String = action.get("type", "")
+	if action_type.is_empty():
+		push_warning("[%s] RECV: missing action type" % PLUGIN_NAME)
+		return
+
+	match action_type:
 		"select", "property", "node_add", "node_delete":
 			print("[%s] APPLYING: %s" % [PLUGIN_NAME, action.get("type")])
 			if _interceptor:
@@ -197,6 +210,12 @@ func _on_relay_message(data: PackedByteArray) -> void:
 				_script_sync.apply_remote_op(
 					action.get("data", {}),
 					action.get("node_path", "")
+				)
+		"crdt_sync":
+			if _script_sync:
+				_script_sync.import_buffer_state(
+					action.get("node_path", ""),
+					action.get("data", {})
 				)
 
 
@@ -298,6 +317,20 @@ func _send_initial_state() -> void:
 		count += 1
 
 	print("[%s] Initial sync sent: %d nodes" % [PLUGIN_NAME, count])
+
+	# Sync CRDT script buffer states so the joiner gets current script content
+	if _script_sync:
+		var buffers: Dictionary = _script_sync.export_all_buffers()
+		for script_path in buffers:
+			var sync_action := {
+				"type": "crdt_sync",
+				"peer_id": _local_peer_id,
+				"timestamp": Time.get_unix_time_from_system(),
+				"node_path": script_path,
+				"data": buffers[script_path],
+			}
+			_send_packet(ActionSerializerClass.serialize(sync_action))
+		print("[%s] Initial sync sent: %d script buffers" % [PLUGIN_NAME, buffers.size()])
 
 
 ## Returns the list of property names worth syncing for a given node.

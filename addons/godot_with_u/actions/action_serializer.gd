@@ -16,6 +16,8 @@ static func serialize(action: Dictionary) -> PackedByteArray:
 
 ## Convert a PackedByteArray → action Dictionary.
 ## Returns an empty Dictionary on failure.
+## Uses bytes_to_var (not bytes_to_var_with_objects) to prevent
+## deserialization of arbitrary Object types from untrusted data.
 static func deserialize(data: PackedByteArray) -> Dictionary:
 	if data.is_empty():
 		return {}

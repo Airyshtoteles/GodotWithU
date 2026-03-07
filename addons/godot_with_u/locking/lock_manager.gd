@@ -9,19 +9,24 @@ extends RefCounted
 ##
 ## Locks are automatically released when:
 ## - The remote peer sends a new selection (old nodes are unlocked)
-## - The remote peer disconnects (future: timeout-based cleanup)
+## - The remote peer disconnects
+## - The lock times out after LOCK_TIMEOUT_SEC seconds without renewal
 
 signal node_locked(node_path: String, peer_id: String)
 signal node_unlocked(node_path: String, peer_id: String)
 signal locks_changed()
 
 const TAG := "LockManager"
+const LOCK_TIMEOUT_SEC := 30.0
 
 ## peer_id → Array[String] of locked node paths
 var _peer_locks: Dictionary = {}
 
 ## node_path → peer_id (reverse lookup for fast is_locked checks)
 var _path_to_peer: Dictionary = {}
+
+## peer_id → last activity timestamp (for timeout detection)
+var _peer_last_seen: Dictionary = {}
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -41,6 +46,9 @@ func get_lock_owner(node_path: String) -> String:
 ## Update locks for a peer based on their latest selection.
 ## Old locks from this peer are released; new paths are locked.
 func update_peer_selection(peer_id: String, selected_paths: Array) -> void:
+	# Record activity for timeout tracking
+	_peer_last_seen[peer_id] = Time.get_unix_time_from_system()
+
 	# Release old locks for this peer
 	_release_peer_locks(peer_id)
 
@@ -62,7 +70,31 @@ func update_peer_selection(peer_id: String, selected_paths: Array) -> void:
 ## Release all locks held by a specific peer (e.g., on disconnect).
 func release_all_for_peer(peer_id: String) -> void:
 	_release_peer_locks(peer_id)
+	_peer_last_seen.erase(peer_id)
 	locks_changed.emit()
+
+
+## Check for timed-out peer locks and release them.
+## Should be called periodically (e.g., from the plugin's poll timer).
+func check_timeouts() -> void:
+	var now := Time.get_unix_time_from_system()
+	var timed_out_peers: Array[String] = []
+
+	for peer_id in _peer_last_seen:
+		var last_seen: float = _peer_last_seen[peer_id]
+		if now - last_seen > LOCK_TIMEOUT_SEC:
+			timed_out_peers.append(peer_id)
+
+	for peer_id in timed_out_peers:
+		print(
+			"[%s] Lock timeout for peer '%s' (no activity for %.0fs)"
+			% [TAG, peer_id, LOCK_TIMEOUT_SEC]
+		)
+		_release_peer_locks(peer_id)
+		_peer_last_seen.erase(peer_id)
+
+	if not timed_out_peers.is_empty():
+		locks_changed.emit()
 
 
 ## Get a list of all currently locked node paths.
