@@ -3,16 +3,9 @@
 **GodotWithU** is a lightweight, pure GDScript real-time collaboration plugin for the Godot Engine (v4+).
 It allows multiple developers to work on the same Godot project simultaneously over a local network or VPN, similar to Unreal Engine's Multi-User Editing.
 
-## Screenshots
+## Demo
 
-> **TODO:** Add screenshots or GIF demos showing the plugin in action.
->
-> Suggested screenshots:
-> - The GodotWithU dock panel (Host/Join UI with IP and Port fields)
-> - Two editors connected: one hosting, one joined
-> - Real-time scene sync in action (moving a node on one editor, reflected on the other)
-> - CRDT script sync (editing a `.gd` file simultaneously)
-> - Lock indicator on nodes being edited by another peer
+![GodotWithU Demo](demo.gif)
 
 ## Features
 
