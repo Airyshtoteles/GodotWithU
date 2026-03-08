@@ -323,15 +323,17 @@ func apply_remote_op(op: Dictionary, script_path: String) -> void:
 	_suppress = false
 
 
-## Surgically insert a character at `doc_index` in the CodeEdit,
-## preserving the local user's caret and selection positions.
+## Surgically insert a character at `doc_index` in the CodeEdit
+## WITHOUT touching the local user's caret or selection. Uses
+## set_line() / insert_line_at() so the edit happens in the
+## background — no cursor jumping or viewport flickering.
 func _apply_surgical_insert(doc_index: int, ch: String) -> void:
 	# Calculate the (line, col) position for the insertion
 	var pos := _flat_to_line_col(_cached_text, doc_index)
 	var insert_line: int = pos[0]
 	var insert_col: int = pos[1]
 
-	# Save local caret state
+	# Save local caret state (to adjust AFTER the background edit)
 	var caret_line := _active_code_edit.get_caret_line()
 	var caret_col := _active_code_edit.get_caret_column()
 
@@ -347,12 +349,21 @@ func _apply_surgical_insert(doc_index: int, ch: String) -> void:
 		sel_to_line = _active_code_edit.get_selection_to_line()
 		sel_to_col = _active_code_edit.get_selection_to_column()
 
-	# Perform surgical insert by temporarily moving caret
-	_active_code_edit.set_caret_line(insert_line)
-	_active_code_edit.set_caret_column(insert_col)
-	_active_code_edit.insert_text_at_caret(ch)
+	# Perform surgical insert via direct line manipulation — never
+	# moves the caret, so the local user sees zero disruption.
+	if ch == "\n":
+		var line_text: String = _active_code_edit.get_line(insert_line)
+		var before: String = line_text.substr(0, insert_col)
+		var after: String = line_text.substr(insert_col)
+		_active_code_edit.set_line(insert_line, before)
+		_active_code_edit.insert_line_at(insert_line + 1, after)
+	else:
+		var line_text: String = _active_code_edit.get_line(insert_line)
+		var new_line_text: String = line_text.substr(0, insert_col) + ch + line_text.substr(insert_col)
+		_active_code_edit.set_line(insert_line, new_line_text)
 
-	# Adjust caret position for the insertion
+	# Adjust caret position for the insertion (shift if insert was
+	# before or on the same line as the caret)
 	var adj_caret := _adjust_pos_for_insert(
 		caret_line, caret_col, insert_line, insert_col, ch)
 	_active_code_edit.set_caret_line(adj_caret[0])

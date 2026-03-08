@@ -477,6 +477,11 @@ func _apply_script_attach(action: Dictionary, root: Node) -> void:
 	file.store_string(script_content)
 	file.close()
 
+	# Tell Godot's resource filesystem about the new/changed file
+	# BEFORE calling load(). Without this, load() may return null
+	# or crash because EditorFileSystem hasn't indexed the file yet.
+	EditorInterface.get_resource_filesystem().update_file(script_path)
+
 	# Load the resource and attach it to the target node
 	var script_res := load(script_path)
 	if script_res:

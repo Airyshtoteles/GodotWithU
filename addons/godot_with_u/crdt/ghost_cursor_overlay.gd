@@ -33,6 +33,7 @@ func attach_to(code_edit: CodeEdit, script_path: String) -> void:
 	if _code_edit and is_instance_valid(_code_edit):
 		if _code_edit.draw.is_connected(_on_code_edit_redraw):
 			_code_edit.draw.disconnect(_on_code_edit_redraw)
+		_disconnect_scroll_bars()
 
 	_code_edit = code_edit
 	_active_script_path = script_path
@@ -40,6 +41,7 @@ func attach_to(code_edit: CodeEdit, script_path: String) -> void:
 
 	if _code_edit:
 		_code_edit.draw.connect(_on_code_edit_redraw)
+		_connect_scroll_bars()
 
 	queue_redraw()
 
@@ -48,6 +50,7 @@ func detach() -> void:
 	if _code_edit and is_instance_valid(_code_edit):
 		if _code_edit.draw.is_connected(_on_code_edit_redraw):
 			_code_edit.draw.disconnect(_on_code_edit_redraw)
+		_disconnect_scroll_bars()
 	_code_edit = null
 	_active_script_path = ""
 	queue_redraw()
@@ -123,4 +126,32 @@ func _draw() -> void:
 
 
 func _on_code_edit_redraw() -> void:
+	queue_redraw()
+
+
+## Connect to CodeEdit's vertical and horizontal scroll bar signals
+## so ghost cursors redraw at correct positions when the user scrolls.
+func _connect_scroll_bars() -> void:
+	if not _code_edit or not is_instance_valid(_code_edit):
+		return
+	var v_bar: VScrollBar = _code_edit.get_v_scroll_bar()
+	if v_bar and not v_bar.value_changed.is_connected(_on_scroll_changed):
+		v_bar.value_changed.connect(_on_scroll_changed)
+	var h_bar: HScrollBar = _code_edit.get_h_scroll_bar()
+	if h_bar and not h_bar.value_changed.is_connected(_on_scroll_changed):
+		h_bar.value_changed.connect(_on_scroll_changed)
+
+
+func _disconnect_scroll_bars() -> void:
+	if not _code_edit or not is_instance_valid(_code_edit):
+		return
+	var v_bar: VScrollBar = _code_edit.get_v_scroll_bar()
+	if v_bar and v_bar.value_changed.is_connected(_on_scroll_changed):
+		v_bar.value_changed.disconnect(_on_scroll_changed)
+	var h_bar: HScrollBar = _code_edit.get_h_scroll_bar()
+	if h_bar and h_bar.value_changed.is_connected(_on_scroll_changed):
+		h_bar.value_changed.disconnect(_on_scroll_changed)
+
+
+func _on_scroll_changed(_value: float) -> void:
 	queue_redraw()
