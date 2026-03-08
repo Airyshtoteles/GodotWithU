@@ -258,9 +258,9 @@ func _on_relay_message(sender_net_id: int, data: PackedByteArray) -> void:
 				_interceptor.apply_remote_action(action)
 			# Also initialize a CRDT buffer so future text edits sync
 			if _script_sync:
-				var data: Dictionary = action.get("data", {})
-				var spath: String = data.get("script_path", "")
-				var scontent: String = data.get("script_content", "")
+				var attach_data: Dictionary = action.get("data", {})
+				var spath: String = attach_data.get("script_path", "")
+				var scontent: String = attach_data.get("script_content", "")
 				if not spath.is_empty():
 					_script_sync.initialize_buffer_from_content(spath, scontent)
 		"crdt":

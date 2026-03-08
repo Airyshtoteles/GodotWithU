@@ -114,7 +114,7 @@ func _draw() -> void:
 
 		# Draw peer label (abbreviated ID)
 		var label_pos := cursor_top + LABEL_OFFSET
-		var short_id := peer_id.substr(peer_id.length() - 6) \
+		var short_id: String = peer_id.substr(peer_id.length() - 6) \
 			if peer_id.length() > 6 else peer_id
 		if font:
 			draw_string(
