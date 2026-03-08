@@ -56,6 +56,11 @@ func update_peer_selection(peer_id: String, selected_paths: Array) -> void:
 	var paths: Array[String] = []
 	for p in selected_paths:
 		var path_str := str(p)
+		# Skip paths already locked by a different peer (first-come wins)
+		if _path_to_peer.has(path_str) and _path_to_peer[path_str] != peer_id:
+			print("[%s] Skipped lock '%s': already held by '%s'" % [
+				TAG, path_str, _path_to_peer[path_str]])
+			continue
 		paths.append(path_str)
 		_path_to_peer[path_str] = peer_id
 		node_locked.emit(path_str, peer_id)

@@ -38,6 +38,10 @@ var _dock: Control = null
 var _local_peer_id: String = "peer_%s" % str(randi()).sha256_text().substr(0, 8)
 var _mode: String = ""   # "host", "join", or ""
 
+## Maps ENet network peer IDs (int) to application-level peer IDs (String).
+## Populated when receiving the first packet (handshake) from each peer.
+var _net_id_to_peer_id: Dictionary = {}   ## int → String
+
 
 # ═════════════════════════════════════════════════════════════════════
 #  Lifecycle
@@ -162,6 +166,7 @@ func _do_stop() -> void:
 		_network_manager.stop()
 		_network_manager = null
 	_mode = ""
+	_net_id_to_peer_id.clear()
 
 	if _dock:
 		_dock.set_disconnected()
@@ -175,8 +180,10 @@ func _do_stop() -> void:
 func _process_network_tick() -> void:
 	if _network_manager and _network_manager.is_active():
 		var packets = _network_manager.poll_messages()
-		for packet in packets:
-			_on_relay_message(packet)
+		for entry in packets:
+			var sender_net_id: int = entry[0]
+			var packet: PackedByteArray = entry[1]
+			_on_relay_message(sender_net_id, packet)
 
 	# Periodically check for timed-out locks
 	if _lock_manager:
@@ -193,29 +200,45 @@ func _send_packet(packet: PackedByteArray) -> void:
 		])
 
 
-func _on_relay_message(data: PackedByteArray) -> void:
+## Send a packet to a single specific peer (by ENet net_id).
+func _send_packet_to(net_id: int, packet: PackedByteArray) -> void:
+	if _network_manager and _mode != "":
+		_network_manager.send_to_peer(net_id, packet)
+
+
+func _on_relay_message(sender_net_id: int, data: PackedByteArray) -> void:
 	print("[%s] RECV: %d bytes" % [PLUGIN_NAME, data.size()])
 	var action: Dictionary = ActionSerializerClass.deserialize(data)
 	if action.is_empty():
 		print("[%s] RECV: deserialization failed!" % PLUGIN_NAME)
 		return
 
+	var action_type: String = action.get("type", "")
+	var sender_peer_id: String = action.get("peer_id", "")
+
 	print("[%s] RECV action: type=%s peer=%s (my_id=%s)" % [
-		PLUGIN_NAME, action.get("type"), action.get("peer_id"), _local_peer_id
+		PLUGIN_NAME, action_type, sender_peer_id, _local_peer_id
 	])
 
 	# Skip own messages
-	if action.get("peer_id", "") == _local_peer_id:
+	if sender_peer_id == _local_peer_id:
 		print("[%s] RECV: skipped own message" % PLUGIN_NAME)
 		return
 
-	# Validate required fields
-	var action_type: String = action.get("type", "")
 	if action_type.is_empty():
 		push_warning("[%s] RECV: missing action type" % PLUGIN_NAME)
 		return
 
+	# Map the ENet network ID to the application peer ID on first contact
+	if not sender_peer_id.is_empty() and not _net_id_to_peer_id.has(sender_net_id):
+		_net_id_to_peer_id[sender_net_id] = sender_peer_id
+		if _dock: _dock.add_peer(sender_peer_id)
+		print("[%s] Mapped net_id=%d → peer_id=%s" % [PLUGIN_NAME, sender_net_id, sender_peer_id])
+
 	match action_type:
+		"handshake":
+			# Handshake is handled by the mapping logic above; nothing else to do
+			print("[%s] Handshake received from %s" % [PLUGIN_NAME, sender_peer_id])
 		"select", "property", "node_add", "node_delete":
 			print("[%s] APPLYING: %s" % [PLUGIN_NAME, action.get("type")])
 			if _interceptor:
@@ -261,21 +284,33 @@ func _on_relay_message(data: PackedByteArray) -> void:
 
 
 func _on_peer_connected(peer_id: int) -> void:
-	var peer_str := str(peer_id)
-	if _dock: _dock.add_peer(peer_str)
-	print("[%s] Peer connected: %s" % [PLUGIN_NAME, peer_str])
+	print("[%s] Peer connected (net_id=%d)" % [PLUGIN_NAME, peer_id])
+
+	# Send a handshake so the remote peer can map our net_id → peer_id
+	var handshake := {
+		"type": "handshake",
+		"peer_id": _local_peer_id,
+		"timestamp": Time.get_unix_time_from_system(),
+	}
+	_send_packet(ActionSerializerClass.serialize(handshake))
 
 	# When hosting, send the current scene state to the new joiner
 	if _mode == "host":
-		_send_initial_state()
+		_send_initial_state(peer_id)
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
-	var peer_str := str(peer_id)
-	if _dock: _dock.remove_peer(peer_str)
-	if _lock_manager: _lock_manager.release_all_for_peer(peer_str)
-	if _ghost_overlay: _ghost_overlay.remove_peer(peer_str)
-	print("[%s] Peer disconnected: %s" % [PLUGIN_NAME, peer_str])
+	# Look up the application-level peer ID from the ENet network ID
+	var app_peer_id: String = _net_id_to_peer_id.get(peer_id, "")
+	if app_peer_id.is_empty():
+		print("[%s] Peer disconnected (net_id=%d) — no handshake received, skipping cleanup" % [PLUGIN_NAME, peer_id])
+		return
+
+	if _dock: _dock.remove_peer(app_peer_id)
+	if _lock_manager: _lock_manager.release_all_for_peer(app_peer_id)
+	if _ghost_overlay: _ghost_overlay.remove_peer(app_peer_id)
+	_net_id_to_peer_id.erase(peer_id)
+	print("[%s] Peer disconnected: %s (net_id=%d)" % [PLUGIN_NAME, app_peer_id, peer_id])
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -330,15 +365,15 @@ func _on_active_editor_changed(code_edit: CodeEdit, script_path: String) -> void
 # ═════════════════════════════════════════════════════════════════════
 
 ## Called on the host when a new peer connects. Iterates the current
-## edited scene root and broadcasts node_add + property packets so the
-## joiner's scene tree matches the host's live state.
-func _send_initial_state() -> void:
+## edited scene root and sends node_add + property packets ONLY to the
+## specified joiner (by ENet net_id) so existing peers are not affected.
+func _send_initial_state(target_net_id: int) -> void:
 	var root := EditorInterface.get_edited_scene_root()
 	if not root:
 		print("[%s] Initial sync skipped: no edited scene" % PLUGIN_NAME)
 		return
 
-	print("[%s] Sending initial scene state..." % PLUGIN_NAME)
+	print("[%s] Sending initial scene state to net_id=%d..." % [PLUGIN_NAME, target_net_id])
 	var nodes := _get_all_scene_nodes(root)
 	var count := 0
 
@@ -362,7 +397,7 @@ func _send_initial_state() -> void:
 				"node_name": str(node.name),
 			},
 		}
-		_send_packet(ActionSerializerClass.serialize(add_action))
+		_send_packet_to(target_net_id, ActionSerializerClass.serialize(add_action))
 
 		# 2. Send key properties (transform, visibility, etc.)
 		var props_to_sync := _get_sync_properties(node)
@@ -378,7 +413,7 @@ func _send_initial_state() -> void:
 					"value": value,
 				},
 			}
-			_send_packet(ActionSerializerClass.serialize(prop_action))
+			_send_packet_to(target_net_id, ActionSerializerClass.serialize(prop_action))
 
 		# 3. If node has a script attached, send script_attach
 		var node_script = node.get_script()
@@ -393,7 +428,7 @@ func _send_initial_state() -> void:
 					"script_content": node_script.source_code,
 				},
 			}
-			_send_packet(ActionSerializerClass.serialize(script_attach_action))
+			_send_packet_to(target_net_id, ActionSerializerClass.serialize(script_attach_action))
 
 		count += 1
 
@@ -410,7 +445,7 @@ func _send_initial_state() -> void:
 				"node_path": script_path,
 				"data": buffers[script_path],
 			}
-			_send_packet(ActionSerializerClass.serialize(sync_action))
+			_send_packet_to(target_net_id, ActionSerializerClass.serialize(sync_action))
 		print("[%s] Initial sync sent: %d script buffers" % [PLUGIN_NAME, buffers.size()])
 
 

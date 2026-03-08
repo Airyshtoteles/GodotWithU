@@ -29,8 +29,9 @@ var _atoms: Array = []        ## Sorted list of character atoms
 var _site_id: String = ""     ## This peer's unique identifier
 var _clock: int = 0           ## Monotonically increasing logical clock
 
-## Hash index for O(1) atom lookup by (site, clock) pair.
-## Key: "site:clock" → value: index in _atoms.
+## O(1) existence check for atoms by (site, clock) pair.
+## Key: "site:clock" → value: true.
+## Used for duplicate detection on remote_insert and fast lookup on remote_delete.
 var _atom_index: Dictionary = {}
 
 
@@ -69,9 +70,9 @@ func local_insert(idx: int, ch: String) -> Dictionary:
 		"char": ch,
 	}
 
-	# Insert into sorted position and rebuild index
+	# Insert into sorted position and add to index
 	_atoms.insert(idx, atom)
-	_rebuild_index_from(idx)
+	_atom_index["%s:%d" % [_site_id, _clock]] = true
 
 	return {
 		"op": "insert",
@@ -88,10 +89,8 @@ func local_delete(idx: int) -> Dictionary:
 		return {}
 
 	var atom: Dictionary = _atoms[idx]
-	var key := "%s:%d" % [atom["site"], atom["clock"]]
-	_atom_index.erase(key)
+	_atom_index.erase("%s:%d" % [atom["site"], atom["clock"]])
 	_atoms.remove_at(idx)
-	_rebuild_index_from(idx)
 
 	return {
 		"op": "delete",
@@ -121,6 +120,11 @@ func remote_insert(op: Dictionary) -> int:
 	if remote_clock >= _clock:
 		_clock = remote_clock + 1
 
+	# Check for duplicate via hash index
+	var key := "%s:%d" % [op["site"], op["clock"]]
+	if _atom_index.has(key):
+		return -1   # duplicate, ignore
+
 	var new_atom := {
 		"pos": op["pos"],
 		"site": op["site"],
@@ -128,16 +132,11 @@ func remote_insert(op: Dictionary) -> int:
 		"char": op["char"],
 	}
 
-	# Check for duplicate via hash index
-	var key := "%s:%d" % [op["site"], op["clock"]]
-	if _atom_index.has(key):
-		return -1   # duplicate, ignore
-
 	# Find the correct sorted insertion point using binary search.
 	var insert_idx := _find_insert_index(new_atom)
 
 	_atoms.insert(insert_idx, new_atom)
-	_rebuild_index_from(insert_idx)
+	_atom_index[key] = true
 	return insert_idx
 
 
@@ -154,14 +153,34 @@ func remote_delete(op: Dictionary) -> int:
 	if remote_clock >= _clock:
 		_clock = remote_clock + 1
 
-	# O(1) lookup by (site, clock) hash
+	# O(1) existence check
 	var key := "%s:%d" % [op["site"], op["clock"]]
-	if _atom_index.has(key):
-		var idx: int = _atom_index[key]
-		_atom_index.erase(key)
+	if not _atom_index.has(key):
+		return -1
+
+	_atom_index.erase(key)
+
+	# Binary search for the atom's position in _atoms using its sort key
+	var target_atom := {
+		"pos": op.get("pos", []),
+		"site": op["site"],
+		"clock": op["clock"],
+	}
+	var idx := _find_insert_index(target_atom)
+
+	# Verify we found the right atom (the one at idx or idx-1 should match)
+	if idx < _atoms.size() and _atom_equals(_atoms[idx], target_atom):
 		_atoms.remove_at(idx)
-		_rebuild_index_from(idx)
 		return idx
+	if idx > 0 and _atom_equals(_atoms[idx - 1], target_atom):
+		_atoms.remove_at(idx - 1)
+		return idx - 1
+
+	# Fallback: linear scan (should rarely happen)
+	for i in range(_atoms.size()):
+		if _atom_equals(_atoms[i], target_atom):
+			_atoms.remove_at(i)
+			return i
 	return -1
 
 
@@ -194,8 +213,10 @@ func import_state(state: Dictionary) -> void:
 	var remote_clock: int = state.get("clock", 0)
 	if remote_clock >= _clock:
 		_clock = remote_clock + 1
+	# Rebuild presence index
 	_atom_index.clear()
-	_rebuild_index_from(0)
+	for atom in _atoms:
+		_atom_index["%s:%d" % [atom["site"], atom["clock"]]] = true
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -286,16 +307,3 @@ func _compare_positions(a: Array, b: Array) -> int:
 
 func _atom_equals(a: Dictionary, b: Dictionary) -> bool:
 	return a["site"] == b["site"] and a["clock"] == b["clock"]
-
-
-# ═════════════════════════════════════════════════════════════════════
-#  Index Maintenance
-# ═════════════════════════════════════════════════════════════════════
-
-## Rebuild the hash index for all atoms from position `start` onward.
-## Called after every insert or delete to keep _atom_index consistent.
-## Callers must erase deleted atoms' keys before calling this method.
-func _rebuild_index_from(start: int) -> void:
-	for i in range(start, _atoms.size()):
-		var a: Dictionary = _atoms[i]
-		_atom_index["%s:%d" % [a["site"], a["clock"]]] = i

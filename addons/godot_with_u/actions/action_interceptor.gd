@@ -201,10 +201,25 @@ func _on_node_removed(node: Node) -> void:
 	var root := EditorInterface.get_edited_scene_root()
 	var rel_path := _clean_path(str(root.get_path_to(node)))
 
-	# Lock check
+	# Lock check — if the node is locked by a remote peer, undo the
+	# deletion on the next frame so the editor state stays consistent.
 	if _lock_manager and _lock_manager.is_locked(rel_path):
 		var lock_owner: String = _lock_manager.get_lock_owner(rel_path)
-		push_warning("[%s] BLOCKED delete: '%s' locked by '%s'" % [TAG, node.name, lock_owner])
+		push_warning("[%s] BLOCKED delete: '%s' locked by '%s' — scheduling undo" % [TAG, node.name, lock_owner])
+		if _undo_redo and root:
+			# Defer the undo to the next frame to avoid re-entrancy.
+			# The last UndoRedo action in the scene history is the delete
+			# we want to reverse.
+			_suppress = true
+			var scene_root := root
+			var ur := _undo_redo
+			(func():
+				if is_instance_valid(scene_root):
+					var history_id := ur.get_object_history_id(scene_root)
+					var history_ur: UndoRedo = ur.get_history_undo_redo(history_id)
+					history_ur.undo()
+				_suppress = false
+			).call_deferred()
 		return
 
 	var action := {
@@ -482,8 +497,10 @@ func _apply_script_attach(action: Dictionary, root: Node) -> void:
 	# or crash because EditorFileSystem hasn't indexed the file yet.
 	EditorInterface.get_resource_filesystem().update_file(script_path)
 
-	# Load the resource and attach it to the target node
-	var script_res := load(script_path)
+	# Use CACHE_MODE_REPLACE to force reading from disk, bypassing
+	# any stale cached version (update_file is async and may not have
+	# finished scanning by the time we call load).
+	var script_res := ResourceLoader.load(script_path, "Script", ResourceLoader.CACHE_MODE_REPLACE) as Script
 	if script_res:
 		target.set_script(script_res)
 		target.notify_property_list_changed()
