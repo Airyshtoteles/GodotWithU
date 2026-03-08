@@ -13,9 +13,12 @@ extends RefCounted
 ## 4. Echo suppression via _suppress flag
 
 signal crdt_op_generated(op: Dictionary, script_path: String)
+signal cursor_changed(data: Dictionary, script_path: String)
+signal active_editor_changed(code_edit: CodeEdit, script_path: String)
 
 const TAG := "ScriptInterceptor"
 const CHECK_INTERVAL_SEC := 0.5
+const CURSOR_BROADCAST_INTERVAL_SEC := 0.1
 
 # ── References ───────────────────────────────────────────────────────
 var _editor_plugin: EditorPlugin
@@ -25,6 +28,9 @@ var _site_id: String = "local"
 var _active_code_edit: CodeEdit = null
 var _active_script_path: String = ""
 var _cached_text: String = ""
+
+# ── Cursor broadcast throttling ──────────────────────────────────────
+var _last_cursor_broadcast: float = 0.0
 
 # ── CRDT buffers: one per open script (keyed by res:// path) ────────
 var _buffers: Dictionary = {}   ## script_path → CRDTTextBuffer
@@ -101,6 +107,24 @@ func import_buffer_state(script_path: String, state: Dictionary) -> void:
 		_suppress = false
 
 
+## Initialize a CRDT buffer from raw script content (used when a
+## script_attach action is received from a remote peer).
+func initialize_buffer_from_content(script_path: String, content: String) -> void:
+	var buf := CRDTTextBuffer.new()
+	buf.init(_site_id)
+	for i in range(content.length()):
+		buf.local_insert(i, content[i])
+	_buffers[script_path] = buf
+	print("[%s] Initialized CRDT buffer for: %s (%d chars)" % [TAG, script_path, content.length()])
+
+
+## Remove the CRDT buffer for a script path (e.g., when script is detached).
+func remove_buffer(script_path: String) -> void:
+	if _buffers.has(script_path):
+		_buffers.erase(script_path)
+		print("[%s] Removed CRDT buffer for: %s" % [TAG, script_path])
+
+
 # ═════════════════════════════════════════════════════════════════════
 #  Active CodeEdit Detection
 # ═════════════════════════════════════════════════════════════════════
@@ -164,6 +188,8 @@ func _connect_code_edit(code_edit: CodeEdit, script_path: String) -> void:
 		_buffers[script_path] = buf
 
 	code_edit.text_changed.connect(_on_text_changed)
+	code_edit.caret_changed.connect(_on_caret_changed)
+	active_editor_changed.emit(code_edit, script_path)
 	print("[%s] Hooked CodeEdit for: %s" % [TAG, script_path])
 
 
@@ -171,6 +197,8 @@ func _disconnect_code_edit() -> void:
 	if _active_code_edit and is_instance_valid(_active_code_edit):
 		if _active_code_edit.text_changed.is_connected(_on_text_changed):
 			_active_code_edit.text_changed.disconnect(_on_text_changed)
+		if _active_code_edit.caret_changed.is_connected(_on_caret_changed):
+			_active_code_edit.caret_changed.disconnect(_on_caret_changed)
 
 	_active_code_edit = null
 	_active_script_path = ""
@@ -230,12 +258,31 @@ func _on_text_changed() -> void:
 	_cached_text = new_text
 
 
+## Broadcast the local user's caret position to peers (throttled).
+func _on_caret_changed() -> void:
+	if _suppress:
+		return
+	if not _active_code_edit or not is_instance_valid(_active_code_edit):
+		return
+
+	var now := Time.get_unix_time_from_system()
+	if now - _last_cursor_broadcast < CURSOR_BROADCAST_INTERVAL_SEC:
+		return
+	_last_cursor_broadcast = now
+
+	cursor_changed.emit({
+		"line": _active_code_edit.get_caret_line(),
+		"column": _active_code_edit.get_caret_column(),
+	}, _active_script_path)
+
+
 # ═════════════════════════════════════════════════════════════════════
 #  Remote CRDT Operations → Apply to CodeEdit
 # ═════════════════════════════════════════════════════════════════════
 
 ## Apply an incoming remote CRDT operation to the local buffer and
-## CodeEdit, preserving the local user's caret position.
+## CodeEdit using surgical text operations (insert/remove) instead of
+## full text replacement, preserving the local user's caret and selection.
 func apply_remote_op(op: Dictionary, script_path: String) -> void:
 	# Get or create buffer
 	if not _buffers.has(script_path):
@@ -263,39 +310,156 @@ func apply_remote_op(op: Dictionary, script_path: String) -> void:
 	if not _active_code_edit or not is_instance_valid(_active_code_edit):
 		return
 
-	# ── Save caret state ─────────────────────────────────────────
-	var caret_line := _active_code_edit.get_caret_line()
-	var caret_col := _active_code_edit.get_caret_column()
-	var caret_flat := _line_col_to_flat(_cached_text, caret_line, caret_col)
-
-	# ── Apply to CodeEdit with echo suppression ──────────────────
 	_suppress = true
+	_active_code_edit.begin_complex_operation()
 
 	var op_type: String = op.get("op", "")
 	if op_type == "insert":
-		var new_full_text := buf.get_text()
-		_active_code_edit.text = new_full_text
-		_cached_text = new_full_text
-
-		# Adjust caret: if insertion is before caret, shift right
-		if doc_index <= caret_flat:
-			caret_flat += 1
-
+		_apply_surgical_insert(doc_index, op.get("char", ""))
 	elif op_type == "delete":
-		var new_full_text := buf.get_text()
-		_active_code_edit.text = new_full_text
-		_cached_text = new_full_text
+		_apply_surgical_delete(doc_index)
 
-		# Adjust caret: if deletion is before caret, shift left
-		if doc_index < caret_flat:
-			caret_flat = maxi(0, caret_flat - 1)
-
-	# ── Restore caret ────────────────────────────────────────────
-	var restored := _flat_to_line_col(_cached_text, caret_flat)
-	_active_code_edit.set_caret_line(restored[0])
-	_active_code_edit.set_caret_column(restored[1])
-
+	_active_code_edit.end_complex_operation()
 	_suppress = false
+
+
+## Surgically insert a character at `doc_index` in the CodeEdit,
+## preserving the local user's caret and selection positions.
+func _apply_surgical_insert(doc_index: int, ch: String) -> void:
+	# Calculate the (line, col) position for the insertion
+	var pos := _flat_to_line_col(_cached_text, doc_index)
+	var insert_line: int = pos[0]
+	var insert_col: int = pos[1]
+
+	# Save local caret state
+	var caret_line := _active_code_edit.get_caret_line()
+	var caret_col := _active_code_edit.get_caret_column()
+
+	# Save selection state
+	var has_sel := _active_code_edit.has_selection()
+	var sel_from_line := -1
+	var sel_from_col := -1
+	var sel_to_line := -1
+	var sel_to_col := -1
+	if has_sel:
+		sel_from_line = _active_code_edit.get_selection_from_line()
+		sel_from_col = _active_code_edit.get_selection_from_column()
+		sel_to_line = _active_code_edit.get_selection_to_line()
+		sel_to_col = _active_code_edit.get_selection_to_column()
+
+	# Perform surgical insert by temporarily moving caret
+	_active_code_edit.set_caret_line(insert_line)
+	_active_code_edit.set_caret_column(insert_col)
+	_active_code_edit.insert_text_at_caret(ch)
+
+	# Adjust caret position for the insertion
+	var adj_caret := _adjust_pos_for_insert(
+		caret_line, caret_col, insert_line, insert_col, ch)
+	_active_code_edit.set_caret_line(adj_caret[0])
+	_active_code_edit.set_caret_column(adj_caret[1])
+
+	# Adjust and restore selection
+	if has_sel:
+		var adj_from := _adjust_pos_for_insert(
+			sel_from_line, sel_from_col, insert_line, insert_col, ch)
+		var adj_to := _adjust_pos_for_insert(
+			sel_to_line, sel_to_col, insert_line, insert_col, ch)
+		_active_code_edit.select(adj_from[0], adj_from[1], adj_to[0], adj_to[1])
+
+	_cached_text = _active_code_edit.text
+
+
+## Surgically delete the character at `doc_index` in the CodeEdit,
+## preserving the local user's caret and selection positions.
+func _apply_surgical_delete(doc_index: int) -> void:
+	if doc_index >= _cached_text.length():
+		_cached_text = _active_code_edit.text
+		return
+
+	# Calculate position of the character to delete
+	var pos := _flat_to_line_col(_cached_text, doc_index)
+	var del_line: int = pos[0]
+	var del_col: int = pos[1]
+
+	# Determine end position (handles newline spanning two lines)
+	var del_char: String = _cached_text[doc_index]
+	var end_line := del_line
+	var end_col := del_col + 1
+	if del_char == "\n":
+		end_line = del_line + 1
+		end_col = 0
+
+	# Save local caret state
+	var caret_line := _active_code_edit.get_caret_line()
+	var caret_col := _active_code_edit.get_caret_column()
+
+	# Save selection state
+	var has_sel := _active_code_edit.has_selection()
+	var sel_from_line := -1
+	var sel_from_col := -1
+	var sel_to_line := -1
+	var sel_to_col := -1
+	if has_sel:
+		sel_from_line = _active_code_edit.get_selection_from_line()
+		sel_from_col = _active_code_edit.get_selection_from_column()
+		sel_to_line = _active_code_edit.get_selection_to_line()
+		sel_to_col = _active_code_edit.get_selection_to_column()
+
+	# Perform surgical delete
+	_active_code_edit.remove_text(del_line, del_col, end_line, end_col)
+
+	# Adjust caret position for the deletion
+	var adj_caret := _adjust_pos_for_delete(
+		caret_line, caret_col, del_line, del_col, del_char)
+	_active_code_edit.set_caret_line(adj_caret[0])
+	_active_code_edit.set_caret_column(adj_caret[1])
+
+	# Adjust and restore selection
+	if has_sel:
+		var adj_from := _adjust_pos_for_delete(
+			sel_from_line, sel_from_col, del_line, del_col, del_char)
+		var adj_to := _adjust_pos_for_delete(
+			sel_to_line, sel_to_col, del_line, del_col, del_char)
+		_active_code_edit.select(adj_from[0], adj_from[1], adj_to[0], adj_to[1])
+
+	_cached_text = _active_code_edit.text
+
+
+## Adjust a (line, col) position after a character insertion.
+## Returns [adjusted_line, adjusted_col].
+static func _adjust_pos_for_insert(
+	line: int, col: int,
+	ins_line: int, ins_col: int,
+	ch: String,
+) -> Array:
+	if ch == "\n":
+		if ins_line < line:
+			return [line + 1, col]
+		if ins_line == line and ins_col <= col:
+			return [line + 1, col - ins_col]
+	else:
+		if ins_line == line and ins_col <= col:
+			return [line, col + 1]
+	return [line, col]
+
+
+## Adjust a (line, col) position after a character deletion.
+## Returns [adjusted_line, adjusted_col].
+static func _adjust_pos_for_delete(
+	line: int, col: int,
+	del_line: int, del_col: int,
+	del_char: String,
+) -> Array:
+	if del_char == "\n":
+		if del_line < line:
+			return [maxi(0, line - 1), col]
+		if del_line == line and del_col == 0 and line > 0:
+			# Edge case: newline at start of current line merges with previous
+			return [maxi(0, line - 1), col]
+	else:
+		if del_line == line and del_col < col:
+			return [line, maxi(0, col - 1)]
+	return [line, col]
 
 
 # ═════════════════════════════════════════════════════════════════════

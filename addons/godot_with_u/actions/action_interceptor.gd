@@ -61,6 +61,9 @@ var _remote_changed_paths: Dictionary = {}   ## rel_path → true
 var _transform_cache: Dictionary = {}   ## rel_path → Transform3D or Transform2D
 var _poll_timer: Timer = null
 
+# ── Script polling (detect script attachment changes) ────────────────
+var _script_cache: Dictionary = {}   ## rel_path → script_resource_path (or "")
+
 
 # ═════════════════════════════════════════════════════════════════════
 #  Init / Teardown
@@ -231,6 +234,13 @@ func _on_inspector_property_changed(_undo_redo: Object, modified_object: Object,
 		push_warning("[%s] BLOCKED: '%s' locked by '%s'" % [TAG, node.name, lock_owner])
 		return true
 
+	# Intercept script attachment: serialize as script_attach/script_detach
+	# instead of generic property (Resource objects can't be serialized
+	# portably via var_to_bytes).
+	if property == "script":
+		_handle_script_property_change(node, rel_path, new_value)
+		return false
+
 	var action := {
 		"type": "property",
 		"peer_id": _peer_id,
@@ -243,6 +253,45 @@ func _on_inspector_property_changed(_undo_redo: Object, modified_object: Object,
 	}
 	_emit(action)
 	return false
+
+
+## Emit a script_attach or script_detach action when the "script"
+## property is changed in the Inspector.
+func _handle_script_property_change(node: Node, rel_path: String, new_value: Variant) -> void:
+	if new_value == null:
+		var old_script_path: String = ""
+		var old_script = node.get_script()
+		if old_script and old_script is Script:
+			old_script_path = old_script.resource_path
+		var action := {
+			"type": "script_detach",
+			"peer_id": _peer_id,
+			"timestamp": Time.get_unix_time_from_system(),
+			"node_path": rel_path,
+			"data": { "script_path": old_script_path },
+		}
+		_emit(action)
+		return
+
+	if not (new_value is Script):
+		return
+
+	var script_res: Script = new_value as Script
+	var script_path: String = script_res.resource_path
+	var script_content: String = script_res.source_code
+
+	var action := {
+		"type": "script_attach",
+		"peer_id": _peer_id,
+		"timestamp": Time.get_unix_time_from_system(),
+		"node_path": rel_path,
+		"data": {
+			"script_path": script_path,
+			"script_content": script_content,
+		},
+	}
+	print("[%s] SCRIPT_ATTACH: %s -> %s" % [TAG, rel_path, script_path])
+	_emit(action)
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -266,6 +315,10 @@ func apply_remote_action(action: Dictionary) -> void:
 			_apply_node_add(action, root)
 		"node_delete":
 			_apply_node_delete(action, root)
+		"script_attach":
+			_apply_script_attach(action, root)
+		"script_detach":
+			_apply_script_detach(action, root)
 
 	_suppress = false
 
@@ -401,6 +454,62 @@ func _apply_node_delete(action: Dictionary, root: Node) -> void:
 	print("[%s] Deleted: %s" % [TAG, rel_path])
 
 
+func _apply_script_attach(action: Dictionary, root: Node) -> void:
+	var rel_path: String = action.get("node_path", "")
+	var data: Dictionary = action.get("data", {})
+	var script_path: String = data.get("script_path", "")
+	var script_content: String = data.get("script_content", "")
+
+	if rel_path.is_empty() or script_path.is_empty():
+		return
+
+	var target: Node = _resolve_node(root, rel_path)
+	if not target:
+		push_warning("[%s] Script attach target not found: '%s'" % [TAG, rel_path])
+		return
+
+	# Write the script file to disk so the peer has a local copy
+	var file := FileAccess.open(script_path, FileAccess.WRITE)
+	if not file:
+		push_warning("[%s] Cannot write script file: '%s' (err %d)" % [
+			TAG, script_path, FileAccess.get_open_error()])
+		return
+	file.store_string(script_content)
+	file.close()
+
+	# Load the resource and attach it to the target node
+	var script_res := load(script_path)
+	if script_res:
+		target.set_script(script_res)
+		target.notify_property_list_changed()
+
+	# Mark for echo suppression
+	var clean_path := _clean_path(rel_path)
+	_remote_changed_paths[clean_path + "::script"] = true
+	_script_cache[clean_path] = script_path
+
+	print("[%s] Script attached: %s -> %s" % [TAG, rel_path, script_path])
+
+
+func _apply_script_detach(action: Dictionary, root: Node) -> void:
+	var rel_path: String = action.get("node_path", "")
+	if rel_path.is_empty():
+		return
+
+	var target: Node = _resolve_node(root, rel_path)
+	if not target:
+		return
+
+	target.set_script(null)
+	target.notify_property_list_changed()
+
+	var clean_path := _clean_path(rel_path)
+	_remote_changed_paths[clean_path + "::script"] = true
+	_script_cache[clean_path] = ""
+
+	print("[%s] Script detached: %s" % [TAG, rel_path])
+
+
 # ═════════════════════════════════════════════════════════════════════
 #  Robust Node Path Resolution
 # ═════════════════════════════════════════════════════════════════════
@@ -473,6 +582,37 @@ func _poll_transforms() -> void:
 		# the same canonical names.
 		var rel_path := _clean_path(str(root.get_path_to(node)))
 
+		# ── Poll script attachment changes ──────────────────────
+		var current_script_path: String = ""
+		var node_script = node.get_script()
+		if node_script and node_script is Script:
+			current_script_path = node_script.resource_path
+
+		var cached_script: String = _script_cache.get(rel_path, "")
+		if current_script_path != cached_script:
+			if not _remote_changed_paths.has(rel_path + "::script"):
+				if current_script_path.is_empty():
+					_emit({
+						"type": "script_detach",
+						"peer_id": _peer_id,
+						"timestamp": Time.get_unix_time_from_system(),
+						"node_path": rel_path,
+						"data": { "script_path": cached_script },
+					})
+				else:
+					_emit({
+						"type": "script_attach",
+						"peer_id": _peer_id,
+						"timestamp": Time.get_unix_time_from_system(),
+						"node_path": rel_path,
+						"data": {
+							"script_path": current_script_path,
+							"script_content": node_script.source_code,
+						},
+					})
+			_script_cache[rel_path] = current_script_path
+
+		# ── Poll transform changes ──────────────────────────────
 		if node is Node3D:
 			var n3d: Node3D = node as Node3D
 			var current_t := n3d.transform

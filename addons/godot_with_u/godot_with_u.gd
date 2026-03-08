@@ -17,6 +17,7 @@ const ActionSerializerClass  = preload("res://addons/godot_with_u/actions/action
 const LockManagerClass       = preload("res://addons/godot_with_u/locking/lock_manager.gd")
 const LockOverlayClass       = preload("res://addons/godot_with_u/locking/lock_overlay.gd")
 const ScriptInterceptorClass = preload("res://addons/godot_with_u/crdt/script_interceptor.gd")
+const GhostCursorOverlayClass = preload("res://addons/godot_with_u/crdt/ghost_cursor_overlay.gd")
 const DockClass              = preload("res://addons/godot_with_u/ui/godot_with_u_dock.gd")
 const NetworkManagerClass    = preload("res://addons/godot_with_u/sync/network_manager.gd")
 
@@ -32,6 +33,7 @@ var _interceptor: RefCounted = null
 var _lock_manager: RefCounted = null
 var _lock_overlay: RefCounted = null
 var _script_sync: RefCounted = null
+var _ghost_overlay: Control = null
 var _dock: Control = null
 var _local_peer_id: String = "peer_%s" % str(randi()).sha256_text().substr(0, 8)
 var _mode: String = ""   # "host", "join", or ""
@@ -62,6 +64,10 @@ func _enter_tree() -> void:
 	_script_sync = ScriptInterceptorClass.new()
 	_script_sync.init(self, _local_peer_id)
 	_script_sync.crdt_op_generated.connect(_on_crdt_op)
+	_script_sync.cursor_changed.connect(_on_cursor_changed)
+	_script_sync.active_editor_changed.connect(_on_active_editor_changed)
+
+	_ghost_overlay = GhostCursorOverlayClass.new()
 
 	_init_dock()
 	print("[%s] Ready — use the dock panel to Host or Join." % PLUGIN_NAME)
@@ -82,8 +88,17 @@ func _exit_tree() -> void:
 
 	if _script_sync:
 		_script_sync.crdt_op_generated.disconnect(_on_crdt_op)
+		_script_sync.cursor_changed.disconnect(_on_cursor_changed)
+		_script_sync.active_editor_changed.disconnect(_on_active_editor_changed)
 		_script_sync.teardown()
 		_script_sync = null
+
+	if _ghost_overlay:
+		_ghost_overlay.detach()
+		if _ghost_overlay.get_parent():
+			_ghost_overlay.get_parent().remove_child(_ghost_overlay)
+		_ghost_overlay.queue_free()
+		_ghost_overlay = null
 
 	if _lock_overlay:
 		_lock_overlay.teardown()
@@ -205,6 +220,26 @@ func _on_relay_message(data: PackedByteArray) -> void:
 			print("[%s] APPLYING: %s" % [PLUGIN_NAME, action.get("type")])
 			if _interceptor:
 				_interceptor.apply_remote_action(action)
+		"script_detach":
+			print("[%s] APPLYING: script_detach" % PLUGIN_NAME)
+			if _interceptor:
+				_interceptor.apply_remote_action(action)
+			if _script_sync:
+				var detach_data: Dictionary = action.get("data", {})
+				var detach_path: String = detach_data.get("script_path", "")
+				if not detach_path.is_empty():
+					_script_sync.remove_buffer(detach_path)
+		"script_attach":
+			print("[%s] APPLYING: script_attach" % PLUGIN_NAME)
+			if _interceptor:
+				_interceptor.apply_remote_action(action)
+			# Also initialize a CRDT buffer so future text edits sync
+			if _script_sync:
+				var data: Dictionary = action.get("data", {})
+				var spath: String = data.get("script_path", "")
+				var scontent: String = data.get("script_content", "")
+				if not spath.is_empty():
+					_script_sync.initialize_buffer_from_content(spath, scontent)
 		"crdt":
 			if _script_sync:
 				_script_sync.apply_remote_op(
@@ -215,6 +250,12 @@ func _on_relay_message(data: PackedByteArray) -> void:
 			if _script_sync:
 				_script_sync.import_buffer_state(
 					action.get("node_path", ""),
+					action.get("data", {})
+				)
+		"cursor_update":
+			if _ghost_overlay:
+				_ghost_overlay.update_peer_cursor(
+					action.get("peer_id", ""),
 					action.get("data", {})
 				)
 
@@ -233,6 +274,7 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	var peer_str := str(peer_id)
 	if _dock: _dock.remove_peer(peer_str)
 	if _lock_manager: _lock_manager.release_all_for_peer(peer_str)
+	if _ghost_overlay: _ghost_overlay.remove_peer(peer_str)
 	print("[%s] Peer disconnected: %s" % [PLUGIN_NAME, peer_str])
 
 
@@ -257,6 +299,30 @@ func _on_crdt_op(op: Dictionary, script_path: String) -> void:
 	var packet: PackedByteArray = ActionSerializerClass.serialize(action)
 	_send_packet(packet)
 
+
+
+func _on_cursor_changed(data: Dictionary, script_path: String) -> void:
+	var action := {
+		"type": "cursor_update",
+		"peer_id": _local_peer_id,
+		"timestamp": Time.get_unix_time_from_system(),
+		"data": {
+			"script_path": script_path,
+			"line": data.get("line", 0),
+			"column": data.get("column", 0),
+		},
+	}
+	var packet: PackedByteArray = ActionSerializerClass.serialize(action)
+	_send_packet(packet)
+
+
+func _on_active_editor_changed(code_edit: CodeEdit, script_path: String) -> void:
+	if _ghost_overlay:
+		if _ghost_overlay.get_parent():
+			_ghost_overlay.get_parent().remove_child(_ghost_overlay)
+		code_edit.add_child(_ghost_overlay)
+		_ghost_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_ghost_overlay.attach_to(code_edit, script_path)
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -313,6 +379,21 @@ func _send_initial_state() -> void:
 				},
 			}
 			_send_packet(ActionSerializerClass.serialize(prop_action))
+
+		# 3. If node has a script attached, send script_attach
+		var node_script = node.get_script()
+		if node_script and node_script is Script:
+			var script_attach_action := {
+				"type": "script_attach",
+				"peer_id": _local_peer_id,
+				"timestamp": Time.get_unix_time_from_system(),
+				"node_path": rel_path,
+				"data": {
+					"script_path": node_script.resource_path,
+					"script_content": node_script.source_code,
+				},
+			}
+			_send_packet(ActionSerializerClass.serialize(script_attach_action))
 
 		count += 1
 

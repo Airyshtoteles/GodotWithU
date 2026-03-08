@@ -20,7 +20,7 @@ const TAG := "CRDTTextBuffer"
 ## Boundary positions — all real characters live between these.
 const POS_BEGIN := [0]
 const POS_END   := [2147483647]   # INT32_MAX
-const BASE      := 256            # Allocation space between positions
+const BASE      := 65536          # 16-bit allocation space per level
 
 # ── Character atom: the unit stored in the buffer ────────────────────
 # Each atom is a Dictionary:  { "pos": Array[int], "site": String, "clock": int, "char": String }
@@ -28,6 +28,10 @@ const BASE      := 256            # Allocation space between positions
 var _atoms: Array = []        ## Sorted list of character atoms
 var _site_id: String = ""     ## This peer's unique identifier
 var _clock: int = 0           ## Monotonically increasing logical clock
+
+## Hash index for O(1) atom lookup by (site, clock) pair.
+## Key: "site:clock" → value: index in _atoms.
+var _atom_index: Dictionary = {}
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -37,6 +41,7 @@ var _clock: int = 0           ## Monotonically increasing logical clock
 func init(site_id: String) -> void:
 	_site_id = site_id
 	_atoms.clear()
+	_atom_index.clear()
 	_clock = 0
 
 
@@ -64,8 +69,9 @@ func local_insert(idx: int, ch: String) -> Dictionary:
 		"char": ch,
 	}
 
-	# Insert into sorted position
+	# Insert into sorted position and rebuild index
 	_atoms.insert(idx, atom)
+	_rebuild_index_from(idx)
 
 	return {
 		"op": "insert",
@@ -82,7 +88,10 @@ func local_delete(idx: int) -> Dictionary:
 		return {}
 
 	var atom: Dictionary = _atoms[idx]
+	var key := "%s:%d" % [atom["site"], atom["clock"]]
+	_atom_index.erase(key)
 	_atoms.remove_at(idx)
+	_rebuild_index_from(idx)
 
 	return {
 		"op": "delete",
@@ -119,16 +128,16 @@ func remote_insert(op: Dictionary) -> int:
 		"char": op["char"],
 	}
 
+	# Check for duplicate via hash index
+	var key := "%s:%d" % [op["site"], op["clock"]]
+	if _atom_index.has(key):
+		return -1   # duplicate, ignore
+
 	# Find the correct sorted insertion point using binary search.
 	var insert_idx := _find_insert_index(new_atom)
 
-	# Check for duplicate (same pos + site + clock = same atom)
-	if insert_idx < _atoms.size():
-		var existing: Dictionary = _atoms[insert_idx]
-		if _atom_equals(existing, new_atom):
-			return -1   # duplicate, ignore
-
 	_atoms.insert(insert_idx, new_atom)
+	_rebuild_index_from(insert_idx)
 	return insert_idx
 
 
@@ -145,11 +154,14 @@ func remote_delete(op: Dictionary) -> int:
 	if remote_clock >= _clock:
 		_clock = remote_clock + 1
 
-	for i in range(_atoms.size()):
-		var atom: Dictionary = _atoms[i]
-		if atom["site"] == op["site"] and atom["clock"] == op["clock"]:
-			_atoms.remove_at(i)
-			return i
+	# O(1) lookup by (site, clock) hash
+	var key := "%s:%d" % [op["site"], op["clock"]]
+	if _atom_index.has(key):
+		var idx: int = _atom_index[key]
+		_atom_index.erase(key)
+		_atoms.remove_at(idx)
+		_rebuild_index_from(idx)
+		return idx
 	return -1
 
 
@@ -182,6 +194,8 @@ func import_state(state: Dictionary) -> void:
 	var remote_clock: int = state.get("clock", 0)
 	if remote_clock >= _clock:
 		_clock = remote_clock + 1
+	_atom_index.clear()
+	_rebuild_index_from(0)
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -189,28 +203,31 @@ func import_state(state: Dictionary) -> void:
 # ═════════════════════════════════════════════════════════════════════
 
 ## Generate a position strictly between `before` and `after`.
-## Uses fractional indexing: if before=[1] and after=[2], result could
-## be [1,128]. If before=[1,128] and after=[1,129], result is [1,128,128].
+## Uses boundary+ strategy: allocates near the lower bound with a small
+## random offset, which works well for sequential left-to-right typing
+## and leaves ample room for future insertions.
 func _alloc_position_between(before: Array, after: Array) -> Array:
 	var result: Array[int] = []
 	var depth := 0
-	var max_depth := maxi(before.size(), after.size()) + 1
+	var max_depth := maxi(before.size(), after.size()) + 2
 
 	while depth <= max_depth:
 		var b: int = before[depth] if depth < before.size() else 0
 		var a: int = after[depth] if depth < after.size() else BASE
 
-		if a - b > 1:
-			# There's room at this level — pick the midpoint
-			result.append(b + (a - b) / 2)
+		var gap := a - b
+		if gap > 1:
+			# Boundary+ strategy: allocate near the lower bound
+			var step := mini(gap - 1, 10)
+			result.append(b + 1 + (randi() % step))
 			return result
 
 		# No room — descend one level deeper
 		result.append(b)
 		depth += 1
 
-	# Fallback: extend with a midpoint at the next level (should rarely hit)
-	result.append(BASE / 2)
+	# Fallback: extend with a value at the next level
+	result.append(1 + (randi() % mini(BASE - 1, 10)))
 	return result
 
 
@@ -269,3 +286,16 @@ func _compare_positions(a: Array, b: Array) -> int:
 
 func _atom_equals(a: Dictionary, b: Dictionary) -> bool:
 	return a["site"] == b["site"] and a["clock"] == b["clock"]
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  Index Maintenance
+# ═════════════════════════════════════════════════════════════════════
+
+## Rebuild the hash index for all atoms from position `start` onward.
+## Called after every insert or delete to keep _atom_index consistent.
+## Callers must erase deleted atoms' keys before calling this method.
+func _rebuild_index_from(start: int) -> void:
+	for i in range(start, _atoms.size()):
+		var a: Dictionary = _atoms[i]
+		_atom_index["%s:%d" % [a["site"], a["clock"]]] = i
