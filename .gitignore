@@ -8,6 +8,11 @@ export_presets.cfg
 .DS_Store
 Thumbs.db
 
+# GodotWithU runtime files
+godot_with_u.db
+godot_with_u.identity
+node_3d.tscn
+
 # Build artifacts
 bin/
 *.dll
