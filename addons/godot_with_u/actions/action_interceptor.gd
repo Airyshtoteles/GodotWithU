@@ -205,7 +205,8 @@ func _on_node_removed(node: Node) -> void:
 	# deletion on the next frame so the editor state stays consistent.
 	if _lock_manager and _lock_manager.is_locked(rel_path):
 		var lock_owner: String = _lock_manager.get_lock_owner(rel_path)
-		push_warning("[%s] BLOCKED delete: '%s' locked by '%s' — scheduling undo" % [TAG, node.name, lock_owner])
+		push_warning("[%s] BLOCKED delete: '%s' locked by '%s'" % [
+			TAG, node.name, lock_owner])
 		if _undo_redo and root:
 			# Defer the undo to the next frame to avoid re-entrancy.
 			# The last UndoRedo action in the scene history is the delete
@@ -500,7 +501,9 @@ func _apply_script_attach(action: Dictionary, root: Node) -> void:
 	# Use CACHE_MODE_REPLACE to force reading from disk, bypassing
 	# any stale cached version (update_file is async and may not have
 	# finished scanning by the time we call load).
-	var script_res := ResourceLoader.load(script_path, "Script", ResourceLoader.CACHE_MODE_REPLACE) as Script
+	var script_res := ResourceLoader.load(
+		script_path, "Script",
+		ResourceLoader.CACHE_MODE_REPLACE) as Script
 	if script_res:
 		target.set_script(script_res)
 		target.notify_property_list_changed()

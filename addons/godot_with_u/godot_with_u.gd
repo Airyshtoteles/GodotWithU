@@ -303,7 +303,8 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	# Look up the application-level peer ID from the ENet network ID
 	var app_peer_id: String = _net_id_to_peer_id.get(peer_id, "")
 	if app_peer_id.is_empty():
-		print("[%s] Peer disconnected (net_id=%d) — no handshake received, skipping cleanup" % [PLUGIN_NAME, peer_id])
+		print("[%s] Peer disconnected (net_id=%d) — no handshake" % [
+			PLUGIN_NAME, peer_id])
 		return
 
 	if _dock: _dock.remove_peer(app_peer_id)
