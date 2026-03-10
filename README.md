@@ -66,7 +66,7 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 If you find this plugin useful, consider supporting the development:
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/airyshtoteles)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/airyshtoteles)
 
 ## License
 
