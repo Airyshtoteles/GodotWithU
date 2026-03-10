@@ -39,6 +39,12 @@ var _buffers: Dictionary = {}   ## script_path → CRDTTextBuffer
 # ── Echo suppression ────────────────────────────────────────────────
 var _suppress: bool = false
 
+# ── Sync pending: when true, local edits are NOT broadcast ─────────
+# Set when joining as client, cleared when host's crdt_sync arrives.
+# Prevents the client from sending ops with incompatible atoms before
+# receiving the host's authoritative buffer state.
+var _sync_pending: bool = false
+
 # ── Polling timer for detecting active editor changes ───────────────
 var _check_timer: Timer = null
 
@@ -141,6 +147,21 @@ func export_buffer(script_path: String) -> Dictionary:
 	return (_buffers[script_path] as CRDTTextBuffer).export_state()
 
 
+## Set/clear the sync_pending flag. While pending, local edits are
+## silently consumed (not broadcast) and new buffer bootstrapping is
+## deferred so the host's authoritative state can arrive first.
+func set_sync_pending(pending: bool) -> void:
+	_sync_pending = pending
+	print("[%s] sync_pending = %s" % [TAG, pending])
+
+
+## Remove ALL CRDT buffers. Called when joining so stale local buffers
+## (bootstrapped before connecting) don't conflict with the host's state.
+func clear_all_buffers() -> void:
+	_buffers.clear()
+	print("[%s] All CRDT buffers cleared." % TAG)
+
+
 # ═════════════════════════════════════════════════════════════════════
 #  Active CodeEdit Detection
 # ═════════════════════════════════════════════════════════════════════
@@ -194,15 +215,20 @@ func _connect_code_edit(code_edit: CodeEdit, script_path: String) -> void:
 	_active_script_path = script_path
 
 	if not _buffers.has(script_path):
-		# Bootstrap a new CRDT buffer from the CodeEdit content
-		var buf := CRDTTextBuffer.new()
-		buf.init(_site_id)
-		var text := code_edit.text
-		for i in range(text.length()):
-			buf.local_insert(i, text[i])
-		_buffers[script_path] = buf
-		_cached_text = text
-		buffer_created.emit(script_path)
+		if _sync_pending:
+			# Waiting for host's authoritative buffer — don't bootstrap
+			# locally. Just cache the current text so we can diff later.
+			_cached_text = code_edit.text
+		else:
+			# Bootstrap a new CRDT buffer from the CodeEdit content
+			var buf := CRDTTextBuffer.new()
+			buf.init(_site_id)
+			var text := code_edit.text
+			for i in range(text.length()):
+				buf.local_insert(i, text[i])
+			_buffers[script_path] = buf
+			_cached_text = text
+			buffer_created.emit(script_path)
 	else:
 		# Buffer exists — may have accumulated remote ops while
 		# this script was in the background. Sync CodeEdit to match.
@@ -248,6 +274,12 @@ func _on_text_changed() -> void:
 	var old_text: String = _cached_text
 
 	if new_text == old_text:
+		return
+
+	# While waiting for the host's authoritative sync, accept the edit
+	# locally but don't generate CRDT ops (they'd have wrong atoms).
+	if _sync_pending:
+		_cached_text = new_text
 		return
 
 	var buf: CRDTTextBuffer = _buffers.get(_active_script_path)

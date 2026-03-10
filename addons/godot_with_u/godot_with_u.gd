@@ -38,6 +38,10 @@ var _dock: Control = null
 var _local_peer_id: String = "peer_%s" % str(randi()).sha256_text().substr(0, 8)
 var _mode: String = ""   # "host", "join", or ""
 
+## Timestamp when _sync_pending was set; used for timeout fallback.
+var _sync_pending_since: float = 0.0
+const SYNC_PENDING_TIMEOUT_SEC := 3.0
+
 ## Maps ENet network peer IDs (int) to application-level peer IDs (String).
 ## Populated when receiving the first packet (handshake) from each peer.
 var _net_id_to_peer_id: Dictionary = {}   ## int → String
@@ -145,11 +149,20 @@ func _do_join(ip: String, port: int) -> void:
 	if ip.is_empty():
 		ip = "127.0.0.1"
 
+	# Clear stale local CRDT buffers and pause op generation until the
+	# host sends its authoritative buffer state via crdt_sync.
+	if _script_sync:
+		_script_sync.clear_all_buffers()
+		_script_sync.set_sync_pending(true)
+		_sync_pending_since = Time.get_unix_time_from_system()
+
 	_network_manager = NetworkManagerClass.new()
 	var err: int = _network_manager.join(ip, port)
 	if err != OK:
 		if _dock: _dock.set_disconnected()
 		_network_manager = null
+		if _script_sync:
+			_script_sync.set_sync_pending(false)
 		return
 
 	_network_manager.peer_connected.connect(_on_peer_connected)
@@ -169,6 +182,9 @@ func _do_stop() -> void:
 		_network_manager = null
 	_mode = ""
 	_net_id_to_peer_id.clear()
+	_sync_pending_since = 0.0
+	if _script_sync:
+		_script_sync.set_sync_pending(false)
 
 	if _dock:
 		_dock.set_disconnected()
@@ -186,6 +202,15 @@ func _process_network_tick() -> void:
 			var sender_net_id: int = entry[0]
 			var packet: PackedByteArray = entry[1]
 			_on_relay_message(sender_net_id, packet)
+
+	# Timeout fallback: if no crdt_sync arrived within the timeout,
+	# clear _sync_pending so the client can start editing normally.
+	if _script_sync and _sync_pending_since > 0.0:
+		var elapsed := Time.get_unix_time_from_system() - _sync_pending_since
+		if elapsed >= SYNC_PENDING_TIMEOUT_SEC:
+			_script_sync.set_sync_pending(false)
+			_sync_pending_since = 0.0
+			print("[%s] sync_pending timed out after %.1fs" % [PLUGIN_NAME, elapsed])
 
 	# Periodically check for timed-out locks
 	if _lock_manager:
@@ -297,6 +322,9 @@ func _on_relay_message(sender_net_id: int, data: PackedByteArray) -> void:
 					# Clients always accept crdt_sync (host is authoritative)
 					_script_sync.import_buffer_state(
 						sync_path, action.get("data", {}))
+					# Host's sync arrived — client can now generate ops safely
+					_script_sync.set_sync_pending(false)
+					_sync_pending_since = 0.0
 		"cursor_update":
 			if _ghost_overlay:
 				_ghost_overlay.update_peer_cursor(

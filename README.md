@@ -62,6 +62,12 @@ Instead of relying on heavy C++ implementations or modifying the main `SceneTree
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
+## Support
+
+If you find this plugin useful, consider supporting the development:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/airyshtoteles)
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
