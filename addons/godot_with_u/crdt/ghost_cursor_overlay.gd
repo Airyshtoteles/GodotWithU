@@ -100,6 +100,16 @@ func _draw() -> void:
 		var line: int = cursor_data.get("line", 0)
 		var col: int = cursor_data.get("column", 0)
 
+		# Clamp line/column to valid range for this CodeEdit
+		var line_count: int = _code_edit.get_line_count()
+		if line >= line_count:
+			line = line_count - 1
+		if line < 0:
+			line = 0
+		var line_length: int = _code_edit.get_line(line).length()
+		if col > line_length:
+			col = line_length
+
 		# Use TextEdit's get_rect_at_line_column() to find pixel position
 		var rect: Rect2 = _code_edit.get_rect_at_line_column(line, col)
 		if rect.size == Vector2.ZERO:

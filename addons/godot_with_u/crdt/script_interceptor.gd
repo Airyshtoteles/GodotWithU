@@ -103,7 +103,7 @@ func import_buffer_state(script_path: String, state: Dictionary) -> void:
 		var caret_col := _active_code_edit.get_caret_column()
 		_active_code_edit.text = buf.get_text()
 		_cached_text = buf.get_text()
-		_active_code_edit.set_caret_line(caret_line)
+		_active_code_edit.set_caret_line(mini(caret_line, _active_code_edit.get_line_count() - 1))
 		_active_code_edit.set_caret_column(caret_col)
 		_suppress = false
 
@@ -351,6 +351,16 @@ func apply_remote_op(op: Dictionary, script_path: String) -> void:
 		_apply_surgical_delete(doc_index)
 
 	_active_code_edit.end_complex_operation()
+
+	# Verify CodeEdit stayed in sync with the CRDT buffer. If a surgical
+	# operation placed a character at the wrong position (e.g. because
+	# the buffers were bootstrapped independently with different atoms),
+	# fall back to a full text replacement so the editor always converges.
+	var expected_text := buf.get_text()
+	if _cached_text != expected_text:
+		_active_code_edit.text = expected_text
+		_cached_text = expected_text
+
 	_suppress = false
 
 
@@ -363,6 +373,16 @@ func _apply_surgical_insert(doc_index: int, ch: String) -> void:
 	var pos := _flat_to_line_col(_cached_text, doc_index)
 	var insert_line: int = pos[0]
 	var insert_col: int = pos[1]
+
+	# Bounds check: if the computed line is out of range, the CodeEdit
+	# and _cached_text have desynced. Fall back to full text replacement
+	# from the CRDT buffer (which already contains the inserted char).
+	if insert_line >= _active_code_edit.get_line_count():
+		var buf: CRDTTextBuffer = _buffers.get(_active_script_path)
+		if buf:
+			_active_code_edit.text = buf.get_text()
+			_cached_text = buf.get_text()
+		return
 
 	# Save local caret state (to adjust AFTER the background edit)
 	var caret_line := _active_code_edit.get_caret_line()
@@ -415,13 +435,28 @@ func _apply_surgical_insert(doc_index: int, ch: String) -> void:
 ## preserving the local user's caret and selection positions.
 func _apply_surgical_delete(doc_index: int) -> void:
 	if doc_index >= _cached_text.length():
-		_cached_text = _active_code_edit.text
+		# Desync: fall back to full text replacement from CRDT buffer
+		var buf: CRDTTextBuffer = _buffers.get(_active_script_path)
+		if buf:
+			_active_code_edit.text = buf.get_text()
+			_cached_text = buf.get_text()
+		else:
+			_cached_text = _active_code_edit.text
 		return
 
 	# Calculate position of the character to delete
 	var pos := _flat_to_line_col(_cached_text, doc_index)
 	var del_line: int = pos[0]
 	var del_col: int = pos[1]
+
+	# Bounds check: if the computed line is out of range, fall back
+	# to full text replacement from the CRDT buffer.
+	if del_line >= _active_code_edit.get_line_count():
+		var buf: CRDTTextBuffer = _buffers.get(_active_script_path)
+		if buf:
+			_active_code_edit.text = buf.get_text()
+			_cached_text = buf.get_text()
+		return
 
 	# Determine end position (handles newline spanning two lines)
 	var del_char: String = _cached_text[doc_index]
