@@ -70,6 +70,7 @@ func _enter_tree() -> void:
 	_script_sync.crdt_op_generated.connect(_on_crdt_op)
 	_script_sync.cursor_changed.connect(_on_cursor_changed)
 	_script_sync.active_editor_changed.connect(_on_active_editor_changed)
+	_script_sync.buffer_created.connect(_on_buffer_created)
 
 	_ghost_overlay = GhostCursorOverlayClass.new()
 
@@ -94,6 +95,7 @@ func _exit_tree() -> void:
 		_script_sync.crdt_op_generated.disconnect(_on_crdt_op)
 		_script_sync.cursor_changed.disconnect(_on_cursor_changed)
 		_script_sync.active_editor_changed.disconnect(_on_active_editor_changed)
+		_script_sync.buffer_created.disconnect(_on_buffer_created)
 		_script_sync.teardown()
 		_script_sync = null
 
@@ -271,10 +273,30 @@ func _on_relay_message(sender_net_id: int, data: PackedByteArray) -> void:
 				)
 		"crdt_sync":
 			if _script_sync:
-				_script_sync.import_buffer_state(
-					action.get("node_path", ""),
-					action.get("data", {})
-				)
+				var sync_path: String = action.get("node_path", "")
+				if _mode == "host":
+					# Host is authoritative. If we already have a buffer
+					# for this script, reject the incoming sync and send
+					# our own buffer back so the client converges.
+					if _script_sync.has_buffer(sync_path):
+						var state := _script_sync.export_buffer(sync_path)
+						if not state.is_empty():
+							var reply := {
+								"type": "crdt_sync",
+								"peer_id": _local_peer_id,
+								"timestamp": Time.get_unix_time_from_system(),
+								"node_path": sync_path,
+								"data": state,
+							}
+							_send_packet(ActionSerializerClass.serialize(reply))
+					else:
+						# Host has no buffer — accept the client's buffer
+						_script_sync.import_buffer_state(
+							sync_path, action.get("data", {}))
+				else:
+					# Clients always accept crdt_sync (host is authoritative)
+					_script_sync.import_buffer_state(
+						sync_path, action.get("data", {}))
 		"cursor_update":
 			if _ghost_overlay:
 				_ghost_overlay.update_peer_cursor(
@@ -334,6 +356,25 @@ func _on_crdt_op(op: Dictionary, script_path: String) -> void:
 	}
 	var packet: PackedByteArray = ActionSerializerClass.serialize(action)
 	_send_packet(packet)
+
+
+func _on_buffer_created(script_path: String) -> void:
+	if _mode == "":
+		return   # Not connected, nothing to sync
+	if not _script_sync:
+		return
+	var state := _script_sync.export_buffer(script_path)
+	if state.is_empty():
+		return
+	var sync_action := {
+		"type": "crdt_sync",
+		"peer_id": _local_peer_id,
+		"timestamp": Time.get_unix_time_from_system(),
+		"node_path": script_path,
+		"data": state,
+	}
+	_send_packet(ActionSerializerClass.serialize(sync_action))
+	print("[%s] Broadcast crdt_sync for newly created buffer: %s" % [PLUGIN_NAME, script_path])
 
 
 

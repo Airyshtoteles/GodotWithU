@@ -15,6 +15,7 @@ extends RefCounted
 signal crdt_op_generated(op: Dictionary, script_path: String)
 signal cursor_changed(data: Dictionary, script_path: String)
 signal active_editor_changed(code_edit: CodeEdit, script_path: String)
+signal buffer_created(script_path: String)
 
 const TAG := "ScriptInterceptor"
 const CHECK_INTERVAL_SEC := 0.5
@@ -110,6 +111,9 @@ func import_buffer_state(script_path: String, state: Dictionary) -> void:
 ## Initialize a CRDT buffer from raw script content (used when a
 ## script_attach action is received from a remote peer).
 func initialize_buffer_from_content(script_path: String, content: String) -> void:
+	if _buffers.has(script_path):
+		print("[%s] Buffer already exists for %s — skipping content init" % [TAG, script_path])
+		return
 	var buf := CRDTTextBuffer.new()
 	buf.init(_site_id)
 	for i in range(content.length()):
@@ -123,6 +127,18 @@ func remove_buffer(script_path: String) -> void:
 	if _buffers.has(script_path):
 		_buffers.erase(script_path)
 		print("[%s] Removed CRDT buffer for: %s" % [TAG, script_path])
+
+
+## Check if a CRDT buffer exists for a script path.
+func has_buffer(script_path: String) -> bool:
+	return _buffers.has(script_path)
+
+
+## Export the state of a single CRDT buffer by script path.
+func export_buffer(script_path: String) -> Dictionary:
+	if not _buffers.has(script_path):
+		return {}
+	return (_buffers[script_path] as CRDTTextBuffer).export_state()
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -176,16 +192,31 @@ func _find_code_edit(node: Node) -> CodeEdit:
 func _connect_code_edit(code_edit: CodeEdit, script_path: String) -> void:
 	_active_code_edit = code_edit
 	_active_script_path = script_path
-	_cached_text = code_edit.text
 
-	# Ensure a CRDT buffer exists for this script
 	if not _buffers.has(script_path):
+		# Bootstrap a new CRDT buffer from the CodeEdit content
 		var buf := CRDTTextBuffer.new()
 		buf.init(_site_id)
-		# Bootstrap the buffer with the current document content
-		for i in range(_cached_text.length()):
-			buf.local_insert(i, _cached_text[i])
+		var text := code_edit.text
+		for i in range(text.length()):
+			buf.local_insert(i, text[i])
 		_buffers[script_path] = buf
+		_cached_text = text
+		buffer_created.emit(script_path)
+	else:
+		# Buffer exists — may have accumulated remote ops while
+		# this script was in the background. Sync CodeEdit to match.
+		var buf: CRDTTextBuffer = _buffers[script_path]
+		var buf_text := buf.get_text()
+		if code_edit.text != buf_text:
+			_suppress = true
+			var caret_line := code_edit.get_caret_line()
+			var caret_col := code_edit.get_caret_column()
+			code_edit.text = buf_text
+			code_edit.set_caret_line(mini(caret_line, code_edit.get_line_count() - 1))
+			code_edit.set_caret_column(caret_col)
+			_suppress = false
+		_cached_text = buf_text
 
 	code_edit.text_changed.connect(_on_text_changed)
 	code_edit.caret_changed.connect(_on_caret_changed)
