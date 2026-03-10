@@ -25,6 +25,7 @@ const NetworkManagerClass    = preload("res://addons/godot_with_u/sync/network_m
 const PLUGIN_NAME    := "GodotWithU"
 const PLUGIN_VERSION := "0.5.0"
 const POLL_INTERVAL_SEC := 0.05
+const SYNC_PENDING_TIMEOUT_SEC := 3.0
 
 # ── State ────────────────────────────────────────────────────────────
 var _network_manager: NetworkManager = null
@@ -40,7 +41,6 @@ var _mode: String = ""   # "host", "join", or ""
 
 ## Timestamp when _sync_pending was set; used for timeout fallback.
 var _sync_pending_since: float = 0.0
-const SYNC_PENDING_TIMEOUT_SEC := 3.0
 
 ## Maps ENet network peer IDs (int) to application-level peer IDs (String).
 ## Populated when receiving the first packet (handshake) from each peer.
