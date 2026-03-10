@@ -279,7 +279,7 @@ func _on_relay_message(sender_net_id: int, data: PackedByteArray) -> void:
 					# for this script, reject the incoming sync and send
 					# our own buffer back so the client converges.
 					if _script_sync.has_buffer(sync_path):
-						var state := _script_sync.export_buffer(sync_path)
+						var state: Dictionary = _script_sync.export_buffer(sync_path)
 						if not state.is_empty():
 							var reply := {
 								"type": "crdt_sync",
@@ -363,7 +363,7 @@ func _on_buffer_created(script_path: String) -> void:
 		return   # Not connected, nothing to sync
 	if not _script_sync:
 		return
-	var state := _script_sync.export_buffer(script_path)
+	var state: Dictionary = _script_sync.export_buffer(script_path)
 	if state.is_empty():
 		return
 	var sync_action := {
