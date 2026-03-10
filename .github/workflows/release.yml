@@ -18,8 +18,7 @@ jobs:
       - name: Zip Addon
         run: |
           mkdir -p release
-          cd addons
-          zip -r ../release/GodotWithU.zip godot_with_u/
+          zip -r release/GodotWithU.zip addons/godot_with_u/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
