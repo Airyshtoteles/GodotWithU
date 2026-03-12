@@ -123,6 +123,7 @@ func _ready() -> void:
 	_build_ui()
 
 
+## Updates UI to show connected status.
 func set_connected(mode: String) -> void:
 	_host_btn.disabled = true
 	_join_btn.disabled = true
@@ -133,6 +134,7 @@ func set_connected(mode: String) -> void:
 	_status_label.add_theme_color_override("font_color", Color.GREEN)
 
 
+## Updates UI to show disconnected status.
 func set_disconnected() -> void:
 	_host_btn.disabled = false
 	_join_btn.disabled = false
@@ -145,11 +147,13 @@ func set_disconnected() -> void:
 		_peer_list.clear()
 
 
+## Adds a peer to the connected peers list.
 func add_peer(peer_id: String) -> void:
 	if _peer_list:
 		_peer_list.add_item("👤 " + peer_id)
 
 
+## Removes a peer from the connected peers list.
 func remove_peer(peer_id: String) -> void:
 	if not _peer_list: return
 	for i in range(_peer_list.item_count - 1, -1, -1):
@@ -157,6 +161,7 @@ func remove_peer(peer_id: String) -> void:
 			_peer_list.remove_item(i)
 
 
+## Updates the info label with plugin status.
 func update_info(text: String) -> void:
 	if _info_label:
 		_info_label.text = text

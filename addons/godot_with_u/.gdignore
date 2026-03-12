@@ -1,0 +1,2 @@
+# .gdignore - Prevents Godot from importing non-code files as resources
+# This protects the addon folder from Godot's automatic resource detection

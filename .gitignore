@@ -15,6 +15,7 @@ node_3d.tscn
 
 # Build artifacts
 bin/
+release/
 *.dll
 *.so
 *.dylib
@@ -22,3 +23,10 @@ bin/
 *.obj
 *.o
 *.pck
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

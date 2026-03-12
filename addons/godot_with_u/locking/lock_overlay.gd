@@ -19,6 +19,7 @@ var _decorated_nodes: Dictionary = {}   ## node_path → original_name
 #  Init / Teardown
 # ═════════════════════════════════════════════════════════════════════
 
+## Initializes lock overlay for visual feedback.
 func init(plugin: EditorPlugin, lock_manager: RefCounted) -> void:
 	_editor_plugin = plugin
 	_lock_manager = lock_manager
@@ -26,6 +27,7 @@ func init(plugin: EditorPlugin, lock_manager: RefCounted) -> void:
 	print("[%s] Overlay active." % TAG)
 
 
+## Cleans up lock overlay resources.
 func teardown() -> void:
 	# Restore all decorated node names
 	_clear_all_decorations()

@@ -19,6 +19,7 @@ var _peer: ENetMultiplayerPeer = null
 var _is_server: bool = false
 var _clients: Array[int] = []
 
+## Creates a host server on the specified port.
 func host(port: int) -> Error:
 	stop()
 	_peer = ENetMultiplayerPeer.new()
@@ -31,6 +32,7 @@ func host(port: int) -> Error:
 		_peer = null
 	return err
 
+## Connects to a host server at the specified address.
 func join(ip: String, port: int) -> Error:
 	stop()
 	_peer = ENetMultiplayerPeer.new()
@@ -43,6 +45,7 @@ func join(ip: String, port: int) -> Error:
 		_peer = null
 	return err
 
+## Stops networking and closes all connections.
 func stop() -> void:
 	if _peer:
 		_peer.close()
@@ -50,6 +53,7 @@ func stop() -> void:
 	_is_server = false
 	_clients.clear()
 
+## Broadcasts a packet to all connected peers.
 func broadcast_packet(packet: PackedByteArray) -> void:
 	if not _peer or _peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
 		return
@@ -116,5 +120,6 @@ func _on_peer_disconnected(id: int) -> void:
 	_clients.erase(id)
 	peer_disconnected.emit(id)
 
+## Checks if the network is currently active.
 func is_active() -> bool:
 	return _peer != null and _peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
