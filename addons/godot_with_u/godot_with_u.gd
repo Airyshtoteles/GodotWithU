@@ -28,7 +28,7 @@ const POLL_INTERVAL_SEC := 0.05
 const SYNC_PENDING_TIMEOUT_SEC := 3.0
 
 # ── State ────────────────────────────────────────────────────────────
-var _network_manager: NetworkManager = null
+var _network_manager: RefCounted = null
 var _poll_timer: Timer = null
 var _interceptor: RefCounted = null
 var _lock_manager: RefCounted = null
