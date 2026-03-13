@@ -17,6 +17,7 @@ signal cursor_changed(data: Dictionary, script_path: String)
 signal active_editor_changed(code_edit: CodeEdit, script_path: String)
 signal buffer_created(script_path: String)
 
+const CRDTTextBufferClass = preload("res://addons/godot_with_u/crdt/crdt_text_buffer.gd")
 const TAG := "ScriptInterceptor"
 const CHECK_INTERVAL_SEC := 0.5
 const CURSOR_BROADCAST_INTERVAL_SEC := 0.1
@@ -86,18 +87,18 @@ func teardown() -> void:
 func export_all_buffers() -> Dictionary:
 	var result: Dictionary = {}
 	for script_path in _buffers:
-		var buf: CRDTTextBuffer = _buffers[script_path]
+		var buf: RefCounted = _buffers[script_path]
 		result[script_path] = buf.export_state()
 	return result
 
 
 ## Import CRDT buffer states received from the host during initial sync.
 func import_buffer_state(script_path: String, state: Dictionary) -> void:
-	var buf: CRDTTextBuffer
+	var buf: RefCounted
 	if _buffers.has(script_path):
 		buf = _buffers[script_path]
 	else:
-		buf = CRDTTextBuffer.new()
+		buf = CRDTTextBufferClass.new()
 		buf.init(_site_id)
 		_buffers[script_path] = buf
 	buf.import_state(state)
@@ -122,7 +123,7 @@ func initialize_buffer_from_content(script_path: String, content: String) -> voi
 	if _buffers.has(script_path):
 		print("[%s] Buffer already exists for %s — skipping content init" % [TAG, script_path])
 		return
-	var buf := CRDTTextBuffer.new()
+	var buf := CRDTTextBufferClass.new()
 	buf.init(_site_id)
 	for i in range(content.length()):
 		buf.local_insert(i, content[i])
@@ -146,7 +147,7 @@ func has_buffer(script_path: String) -> bool:
 func export_buffer(script_path: String) -> Dictionary:
 	if not _buffers.has(script_path):
 		return {}
-	return (_buffers[script_path] as CRDTTextBuffer).export_state()
+	return _buffers[script_path].export_state()
 
 
 ## Set/clear the sync_pending flag. While pending, local edits are
@@ -223,7 +224,7 @@ func _connect_code_edit(code_edit: CodeEdit, script_path: String) -> void:
 			_cached_text = code_edit.text
 		else:
 			# Bootstrap a new CRDT buffer from the CodeEdit content
-			var buf := CRDTTextBuffer.new()
+			var buf := CRDTTextBufferClass.new()
 			buf.init(_site_id)
 			var text := code_edit.text
 			for i in range(text.length()):
@@ -234,8 +235,8 @@ func _connect_code_edit(code_edit: CodeEdit, script_path: String) -> void:
 	else:
 		# Buffer exists — may have accumulated remote ops while
 		# this script was in the background. Sync CodeEdit to match.
-		var buf: CRDTTextBuffer = _buffers[script_path]
-		var buf_text := buf.get_text()
+		var buf: RefCounted = _buffers[script_path]
+		var buf_text: String = buf.get_text()
 		if code_edit.text != buf_text:
 			_suppress = true
 			var caret_line := code_edit.get_caret_line()
@@ -284,7 +285,7 @@ func _on_text_changed() -> void:
 		_cached_text = new_text
 		return
 
-	var buf: CRDTTextBuffer = _buffers.get(_active_script_path)
+	var buf: RefCounted = _buffers.get(_active_script_path)
 	if not buf:
 		_cached_text = new_text
 		return
@@ -351,11 +352,11 @@ func _on_caret_changed() -> void:
 func apply_remote_op(op: Dictionary, script_path: String) -> void:
 	# Get or create buffer
 	if not _buffers.has(script_path):
-		var buf := CRDTTextBuffer.new()
-		buf.init(_site_id)
-		_buffers[script_path] = buf
+		var new_buf := CRDTTextBufferClass.new()
+		new_buf.init(_site_id)
+		_buffers[script_path] = new_buf
 
-	var buf: CRDTTextBuffer = _buffers[script_path]
+	var buf: RefCounted = _buffers[script_path]
 	var doc_index: int = -1
 
 	match op.get("op", ""):
@@ -412,7 +413,7 @@ func _apply_surgical_insert(doc_index: int, ch: String) -> void:
 	# and _cached_text have desynced. Fall back to full text replacement
 	# from the CRDT buffer (which already contains the inserted char).
 	if insert_line >= _active_code_edit.get_line_count():
-		var buf: CRDTTextBuffer = _buffers.get(_active_script_path)
+		var buf: RefCounted = _buffers.get(_active_script_path)
 		if buf:
 			_active_code_edit.text = buf.get_text()
 			_cached_text = buf.get_text()
@@ -470,7 +471,7 @@ func _apply_surgical_insert(doc_index: int, ch: String) -> void:
 func _apply_surgical_delete(doc_index: int) -> void:
 	if doc_index >= _cached_text.length():
 		# Desync: fall back to full text replacement from CRDT buffer
-		var buf: CRDTTextBuffer = _buffers.get(_active_script_path)
+		var buf: RefCounted = _buffers.get(_active_script_path)
 		if buf:
 			_active_code_edit.text = buf.get_text()
 			_cached_text = buf.get_text()
@@ -486,7 +487,7 @@ func _apply_surgical_delete(doc_index: int) -> void:
 	# Bounds check: if the computed line is out of range, fall back
 	# to full text replacement from the CRDT buffer.
 	if del_line >= _active_code_edit.get_line_count():
-		var buf: CRDTTextBuffer = _buffers.get(_active_script_path)
+		var buf: RefCounted = _buffers.get(_active_script_path)
 		if buf:
 			_active_code_edit.text = buf.get_text()
 			_cached_text = buf.get_text()
