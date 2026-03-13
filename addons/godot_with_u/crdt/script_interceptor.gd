@@ -311,14 +311,14 @@ func _on_text_changed() -> void:
 	# ── Generate CRDT operations ─────────────────────────────────
 	# Process deletes first (from right to left to keep indices stable)
 	for i in range(deleted_count - 1, -1, -1):
-		var op := buf.local_delete(prefix_len + i)
+		var op: Dictionary = buf.local_delete(prefix_len + i)
 		if not op.is_empty():
 			crdt_op_generated.emit(op, _active_script_path)
 
 	# Then inserts (left to right)
 	for i in range(inserted_count):
 		var ch: String = new_text[prefix_len + i]
-		var op := buf.local_insert(prefix_len + i, ch)
+		var op: Dictionary = buf.local_insert(prefix_len + i, ch)
 		crdt_op_generated.emit(op, _active_script_path)
 
 	_cached_text = new_text
@@ -391,7 +391,7 @@ func apply_remote_op(op: Dictionary, script_path: String) -> void:
 	# operation placed a character at the wrong position (e.g. because
 	# the buffers were bootstrapped independently with different atoms),
 	# fall back to a full text replacement so the editor always converges.
-	var expected_text := buf.get_text()
+	var expected_text: String = buf.get_text()
 	if _cached_text != expected_text:
 		_active_code_edit.text = expected_text
 		_cached_text = expected_text
