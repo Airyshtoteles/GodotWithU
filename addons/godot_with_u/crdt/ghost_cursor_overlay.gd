@@ -29,7 +29,6 @@ var _code_edit: CodeEdit = null
 var _active_script_path: String = ""
 
 
-## Attaches overlay to a CodeEdit and displays remote cursors.
 func attach_to(code_edit: CodeEdit, script_path: String) -> void:
 	if _code_edit and is_instance_valid(_code_edit):
 		if _code_edit.draw.is_connected(_on_code_edit_redraw):
@@ -47,7 +46,6 @@ func attach_to(code_edit: CodeEdit, script_path: String) -> void:
 	queue_redraw()
 
 
-## Detaches overlay and cleans up resources.
 func detach() -> void:
 	if _code_edit and is_instance_valid(_code_edit):
 		if _code_edit.draw.is_connected(_on_code_edit_redraw):
@@ -58,7 +56,6 @@ func detach() -> void:
 	queue_redraw()
 
 
-## Updates the cursor position for a specific peer.
 func update_peer_cursor(peer_id: String, data: Dictionary) -> void:
 	_peer_cursors[peer_id] = {
 		"script_path": data.get("script_path", ""),
@@ -69,7 +66,6 @@ func update_peer_cursor(peer_id: String, data: Dictionary) -> void:
 	queue_redraw()
 
 
-## Removes a peer cursor from the display.
 func remove_peer(peer_id: String) -> void:
 	_peer_cursors.erase(peer_id)
 	queue_redraw()

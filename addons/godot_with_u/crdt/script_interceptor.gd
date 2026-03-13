@@ -54,7 +54,6 @@ var _check_timer: Timer = null
 #  Initialization / Teardown
 # ═════════════════════════════════════════════════════════════════════
 
-## Initializes script interceptor with plugin and peer ID.
 func init(plugin: EditorPlugin, site_id: String) -> void:
 	_editor_plugin = plugin
 	_site_id = site_id
@@ -71,7 +70,6 @@ func init(plugin: EditorPlugin, site_id: String) -> void:
 	print("[%s] Initialized (site_id=%s)." % [TAG, _site_id])
 
 
-## Cleans up script interception resources.
 func teardown() -> void:
 	_disconnect_code_edit()
 

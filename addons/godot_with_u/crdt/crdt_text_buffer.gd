@@ -39,7 +39,6 @@ var _atom_index: Dictionary = {}
 #  Initialization
 # ═════════════════════════════════════════════════════════════════════
 
-## Initializes CRDT buffer with a site ID.
 func init(site_id: String) -> void:
 	_site_id = site_id
 	_atoms.clear()
@@ -51,7 +50,7 @@ func init(site_id: String) -> void:
 #  Local Operations → generate CRDT ops to broadcast
 # ═════════════════════════════════════════════════════════════════════
 
-## Inserts a character at the specified index and returns the operation.
+## Insert a character at document index `idx`. Returns the CRDT op dict.
 func local_insert(idx: int, ch: String) -> Dictionary:
 	# Clamp index to valid range
 	idx = clampi(idx, 0, _atoms.size())
@@ -84,7 +83,7 @@ func local_insert(idx: int, ch: String) -> Dictionary:
 	}
 
 
-## Deletes a character at the specified index and returns the operation.
+## Delete the character at document index `idx`. Returns the CRDT op dict.
 func local_delete(idx: int) -> Dictionary:
 	if idx < 0 or idx >= _atoms.size():
 		return {}
@@ -105,7 +104,8 @@ func local_delete(idx: int) -> Dictionary:
 #  Remote Operations → apply incoming ops from other peers
 # ═════════════════════════════════════════════════════════════════════
 
-## Applies a remote insert operation to the buffer.
+## Apply a remote insert. Returns the document index where it was placed,
+## or -1 if it was a duplicate (already exists).
 func remote_insert(op: Dictionary) -> int:
 	# Validate required fields
 	if not op.has("pos") or not op.has("site") or not op.has("clock") or not op.has("char"):
@@ -140,7 +140,8 @@ func remote_insert(op: Dictionary) -> int:
 	return insert_idx
 
 
-## Applies a remote delete operation to the buffer.
+## Apply a remote delete. Returns the document index that was removed,
+## or -1 if the atom was not found (already deleted / out of sync).
 func remote_delete(op: Dictionary) -> int:
 	# Validate required fields
 	if not op.has("site") or not op.has("clock"):
@@ -187,7 +188,6 @@ func remote_delete(op: Dictionary) -> int:
 #  Document Reconstruction
 # ═════════════════════════════════════════════════════════════════════
 
-## Returns the current text content of the buffer.
 func get_text() -> String:
 	var result := PackedStringArray()
 	for atom in _atoms:
@@ -195,12 +195,11 @@ func get_text() -> String:
 	return "".join(result)
 
 
-## Returns the current length of the buffer.
 func get_length() -> int:
 	return _atoms.size()
 
 
-## Exports the current buffer state for synchronization.
+## Export the full buffer state for initial sync to a joining peer.
 func export_state() -> Dictionary:
 	return {
 		"atoms": _atoms.duplicate(true),
@@ -208,7 +207,7 @@ func export_state() -> Dictionary:
 	}
 
 
-## Imports a buffer state from a remote peer.
+## Import a full buffer state received from the host during initial sync.
 func import_state(state: Dictionary) -> void:
 	_atoms = state.get("atoms", []).duplicate(true)
 	var remote_clock: int = state.get("clock", 0)

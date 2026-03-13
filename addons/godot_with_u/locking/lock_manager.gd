@@ -33,7 +33,7 @@ var _peer_last_seen: Dictionary = {}
 #  Public API
 # ═════════════════════════════════════════════════════════════════════
 
-## Checks if a node is currently locked.
+## Check if a node path is locked by ANY remote peer.
 func is_locked(node_path: String) -> bool:
 	return _path_to_peer.has(node_path)
 

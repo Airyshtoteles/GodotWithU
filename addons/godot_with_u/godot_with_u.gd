@@ -123,7 +123,6 @@ func _exit_tree() -> void:
 #  Host / Join / Stop — Pure GDScript NetworkManager
 # ═════════════════════════════════════════════════════════════════════
 
-## Starts hosting a collaborative session on the specified port.
 func _do_host(port: int) -> void:
 	if _mode != "": return
 
@@ -144,7 +143,6 @@ func _do_host(port: int) -> void:
 	print("[%s] Hosting on port %d — peer_id: %s" % [PLUGIN_NAME, port, _local_peer_id])
 
 
-## Joins an existing collaborative session at the specified host IP and port.
 func _do_join(ip: String, port: int) -> void:
 	if _mode != "": return
 
@@ -178,7 +176,6 @@ func _do_join(ip: String, port: int) -> void:
 	print("[%s] Joined host at %s:%d — peer_id: %s" % [PLUGIN_NAME, ip, port, _local_peer_id])
 
 
-## Stops the collaborative session and disconnects all peers.
 func _do_stop() -> void:
 	if _network_manager:
 		_network_manager.stop()
@@ -220,7 +217,6 @@ func _process_network_tick() -> void:
 		_lock_manager.check_timeouts()
 
 
-## Broadcasts a packet to all connected peers.
 func _send_packet(packet: PackedByteArray) -> void:
 	if _network_manager and _mode != "":
 		print("[%s] SEND: %d bytes" % [PLUGIN_NAME, packet.size()])

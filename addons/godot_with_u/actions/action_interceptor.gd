@@ -69,7 +69,6 @@ var _script_cache: Dictionary = {}   ## rel_path → script_resource_path (or ""
 #  Init / Teardown
 # ═════════════════════════════════════════════════════════════════════
 
-## Initializes the action interceptor and hooks into editor signals.
 func init(plugin: EditorPlugin) -> void:
 	_editor_plugin   = plugin
 	_editor_selection = EditorInterface.get_selection()
@@ -92,12 +91,10 @@ func init(plugin: EditorPlugin) -> void:
 	print("[%s] Hooks connected." % TAG)
 
 
-## Sets the lock manager for conflict prevention during remote actions.
 func set_lock_manager(lm: RefCounted) -> void:
 	_lock_manager = lm
 
 
-## Cleans up signal connections and releases resources.
 func teardown() -> void:
 	if _editor_selection:
 		if _editor_selection.selection_changed.is_connected(_on_selection_changed):
@@ -317,7 +314,6 @@ func _handle_script_property_change(node: Node, rel_path: String, new_value: Var
 #  Apply Remote Actions
 # ═════════════════════════════════════════════════════════════════════
 
-## Applies a remote action (node changes, property updates, etc.) to the local scene.
 func apply_remote_action(action: Dictionary) -> void:
 	_suppress = true
 
