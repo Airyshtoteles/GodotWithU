@@ -1,6 +1,7 @@
+# gdlint:disable=max-file-lines
 @tool
 extends EditorPlugin
-## GodotWithU v0.7.0 — Real-time collaborative workspace for Godot Editor.
+## GodotWithU v0.8.0 — Real-time collaborative workspace for Godot Editor.
 ##
 ## Transport modes:
 ## - ENet: direct host/join for native editors on LAN/VPN.
@@ -67,6 +68,9 @@ const ANIMATION_PLAYER_SYNC_PROPERTIES := [
 	"autoplay",
 	"speed_scale",
 ]
+## Minimum delay between two same-file collision toasts for one peer and file.
+const _SAME_FILE_NOTIFY_COOLDOWN := 120.0
+const FILE_SYNC_SIZE_LIMIT := 4 * 1024 * 1024  ## 4 MB max per file
 
 # ── State ────────────────────────────────────────────────────────────
 var _network_manager: RefCounted = null
@@ -107,7 +111,6 @@ var _peer_scripts: Dictionary = {}  ## peer_id → script_path
 ## Path of the GDScript the local user currently has open in the script editor.
 var _local_open_script: String = ""
 ## Throttle same-file collision toasts: "peer_id:file" → last notification time.
-const _SAME_FILE_NOTIFY_COOLDOWN := 120.0
 var _same_file_notified: Dictionary = {}  ## String → float
 
 # ── File sync ────────────────────────────────────────────────────────
@@ -116,7 +119,6 @@ var _same_file_notified: Dictionary = {}  ## String → float
 var _file_snapshot: Dictionary = {}       ## res:// path → true
 ## Paths received from the network — suppresses echoing them back.
 var _received_file_paths: Dictionary = {} ## path → true
-const FILE_SYNC_SIZE_LIMIT := 4 * 1024 * 1024  ## 4 MB max per file
 
 # ── Incoming packets ─────────────────────────────────────────────────
 ## Packets read from the transport but not applied yet ([net_id, bytes] pairs).
@@ -144,41 +146,8 @@ func _enter_tree() -> void:
 	_poll_timer.timeout.connect(_process_network_tick)
 	add_child(_poll_timer)
 
-	_lock_manager = _instantiate_addon_script("locking/lock_manager.gd", "LockManager") as RefCounted
-	if _lock_manager == null:
-		return
-	_lock_overlay = _instantiate_addon_script("locking/lock_overlay.gd", "LockOverlay") as RefCounted
-	if _lock_overlay == null:
-		return
-	_lock_overlay.init(self, _lock_manager)
-
-	_interceptor = _instantiate_addon_script("actions/action_interceptor.gd", "ActionInterceptor") as RefCounted
-	if _interceptor == null:
-		return
-	_interceptor.init(self)
-	_interceptor.set_lock_manager(_lock_manager)
-	_interceptor.action_captured.connect(_on_action_captured)
-
-	_script_sync = _instantiate_addon_script("crdt/script_interceptor.gd", "ScriptInterceptor") as RefCounted
-	if _script_sync == null:
-		return
-	_script_sync.init(self, _local_peer_id)
-	_script_sync.crdt_op_generated.connect(_on_crdt_op)
-	_script_sync.cursor_changed.connect(_on_cursor_changed)
-	_script_sync.active_editor_changed.connect(_on_active_editor_changed)
-	_script_sync.buffer_created.connect(_on_buffer_created)
-
-	_ghost_overlay = _instantiate_addon_script("crdt/ghost_cursor_overlay.gd", "GhostCursorOverlay") as Control
-	if _ghost_overlay == null:
-		return
-
-	_auth_client = _instantiate_addon_script("auth/auth_client.gd", "AuthClient") as RefCounted
-	if _auth_client == null:
-		return
-	_auth_client.attach(self)
-
-	_init_dock()
-	if _dock == null:
+	# Each step stops at the first module that fails to load.
+	if not (_init_locking() and _init_interceptors() and _init_editor_ui()):
 		return
 	EditorInterface.get_resource_filesystem().filesystem_changed.connect(_on_filesystem_changed)
 	scene_changed.connect(_on_own_scene_changed)
@@ -187,6 +156,53 @@ func _enter_tree() -> void:
 
 	# Attempt silent authentication using any token saved by the Cloud addon.
 	_try_silent_authenticate()
+
+
+func _init_locking() -> bool:
+	_lock_manager = _instantiate_addon_script("locking/lock_manager.gd", "LockManager") as RefCounted
+	if _lock_manager == null:
+		return false
+	_lock_overlay = _instantiate_addon_script("locking/lock_overlay.gd", "LockOverlay") as RefCounted
+	if _lock_overlay == null:
+		return false
+	_lock_overlay.init(self, _lock_manager)
+	return true
+
+
+func _init_interceptors() -> bool:
+	_interceptor = _instantiate_addon_script(
+		"actions/action_interceptor.gd", "ActionInterceptor") as RefCounted
+	if _interceptor == null:
+		return false
+	_interceptor.init(self)
+	_interceptor.set_lock_manager(_lock_manager)
+	_interceptor.action_captured.connect(_on_action_captured)
+
+	_script_sync = _instantiate_addon_script(
+		"crdt/script_interceptor.gd", "ScriptInterceptor") as RefCounted
+	if _script_sync == null:
+		return false
+	_script_sync.init(self, _local_peer_id)
+	_script_sync.crdt_op_generated.connect(_on_crdt_op)
+	_script_sync.cursor_changed.connect(_on_cursor_changed)
+	_script_sync.active_editor_changed.connect(_on_active_editor_changed)
+	_script_sync.buffer_created.connect(_on_buffer_created)
+	return true
+
+
+func _init_editor_ui() -> bool:
+	_ghost_overlay = _instantiate_addon_script(
+		"crdt/ghost_cursor_overlay.gd", "GhostCursorOverlay") as Control
+	if _ghost_overlay == null:
+		return false
+
+	_auth_client = _instantiate_addon_script("auth/auth_client.gd", "AuthClient") as RefCounted
+	if _auth_client == null:
+		return false
+	_auth_client.attach(self)
+
+	_init_dock()
+	return _dock != null
 
 
 ## Folder the plugin is installed in. Modules load relative to it, so copying the
@@ -205,7 +221,10 @@ func _instantiate_addon_script(relative_path: String, label: String) -> Object:
 		if fresh_script != null and fresh_script.can_instantiate():
 			script = fresh_script
 		else:
-			push_error("[%s] %s at %s cannot be instantiated. Disable/re-enable the addon after this update; restart Godot only if the cache still keeps the old script." % [PLUGIN_NAME, label, script_path])
+			push_error(
+				("[%s] %s at %s cannot be instantiated. Disable/re-enable the addon after "
+				+ "this update; restart Godot only if the cache still keeps the old script.")
+				% [PLUGIN_NAME, label, script_path])
 			return null
 	return script.new()
 
@@ -225,14 +244,16 @@ func _load_addon_script_from_source(script_path: String, label: String) -> Scrip
 	var source := FileAccess.get_file_as_string(script_path)
 	var read_error := FileAccess.get_open_error()
 	if read_error != OK:
-		push_error("[%s] Could not read %s from %s: %s." % [PLUGIN_NAME, label, script_path, error_string(read_error)])
+		push_error("[%s] Could not read %s from %s: %s." % [
+			PLUGIN_NAME, label, script_path, error_string(read_error)])
 		return null
 	var script := GDScript.new()
 	script.resource_path = script_path
 	script.source_code = source
 	var reload_error := script.reload(false)
 	if reload_error != OK:
-		push_error("[%s] Could not compile %s from %s: %s." % [PLUGIN_NAME, label, script_path, error_string(reload_error)])
+		push_error("[%s] Could not compile %s from %s: %s." % [
+			PLUGIN_NAME, label, script_path, error_string(reload_error)])
 		return null
 	return script
 
@@ -279,9 +300,9 @@ func _exit_tree() -> void:
 		_auth_client.detach()
 		_auth_client = null
 	_auth_bearer_token = ""
-	var _rfs := EditorInterface.get_resource_filesystem()
-	if _rfs.filesystem_changed.is_connected(_on_filesystem_changed):
-		_rfs.filesystem_changed.disconnect(_on_filesystem_changed)
+	var rfs := EditorInterface.get_resource_filesystem()
+	if rfs.filesystem_changed.is_connected(_on_filesystem_changed):
+		rfs.filesystem_changed.disconnect(_on_filesystem_changed)
 	if scene_changed.is_connected(_on_own_scene_changed):
 		scene_changed.disconnect(_on_own_scene_changed)
 	if Engine.has_meta(SHARED_META_KEY) and Engine.get_meta(SHARED_META_KEY) == self:
@@ -297,7 +318,8 @@ func _do_host(config: Dictionary) -> void:
 	if _mode != "": return
 	var relay_token := _relay_token(config)
 
-	_network_manager = _instantiate_addon_script("sync/network_manager.gd", "NetworkManager") as RefCounted
+	_network_manager = _instantiate_addon_script(
+		"sync/network_manager.gd", "NetworkManager") as RefCounted
 	if _network_manager == null:
 		if _dock: _dock.set_disconnected()
 		return
@@ -363,7 +385,8 @@ func _do_join(config: Dictionary) -> void:
 		if transport != NETWORK_TRANSPORT_WEBSOCKET:
 			_script_sync.clear_all_buffers()
 
-	_network_manager = _instantiate_addon_script("sync/network_manager.gd", "NetworkManager") as RefCounted
+	_network_manager = _instantiate_addon_script(
+		"sync/network_manager.gd", "NetworkManager") as RefCounted
 	if _network_manager == null:
 		if _dock: _dock.set_disconnected()
 		if _script_sync:
@@ -488,7 +511,8 @@ func _on_relay_rejected(rejection: Dictionary) -> void:
 	var code := String(rejection.get("code", ""))
 	var mode := String(rejection.get("auth", ""))
 	var relay_url := _current_relay_url
-	print("[%s] Relay refused the join (%s): %s" % [PLUGIN_NAME, code, String(rejection.get("message", ""))])
+	print("[%s] Relay refused the join (%s): %s" % [
+		PLUGIN_NAME, code, String(rejection.get("message", ""))])
 	_do_stop()
 	var message := ""
 	match code:
@@ -682,7 +706,8 @@ func _send_gwu_activity_ping(disconnect: bool = false) -> void:
 		var script_display := String(_local_open_script).trim_prefix("res://")
 		if not open_files.has(script_display):
 			open_files.append(script_display)
-	_auth_client.post_activity_ping(project_name, open_files, disconnect, _build_gwu_activity_metadata())
+	_auth_client.post_activity_ping(
+		project_name, open_files, disconnect, _build_gwu_activity_metadata())
 
 
 ## Blocking variant used during _exit_tree so the disconnect is guaranteed to
@@ -797,11 +822,14 @@ func _on_relay_message(sender_net_id: int, data: PackedByteArray) -> void:
 	# Scene-node actions must only be applied when both peers have the same
 	# scene open. If the sender's scene_path is known and differs from the
 	# local scene, discard the packet to avoid corrupting unrelated scenes.
-	const SCENE_NODE_ACTIONS := ["select", "property", "node_add", "node_delete", "node_rename", "node_reorder", "script_attach", "script_detach", "scene_guides", "scene_state"]
+	const SCENE_NODE_ACTIONS := [
+		"select", "property", "node_add", "node_delete", "node_rename", "node_reorder",
+		"script_attach", "script_detach", "scene_guides", "scene_state",
+	]
 	if action_type in SCENE_NODE_ACTIONS:
 		var sender_scene: String = action.get("scene_path", "")
-		var _guard_root := EditorInterface.get_edited_scene_root()
-		var local_scene: String = _guard_root.scene_file_path if _guard_root else ""
+		var guard_root := EditorInterface.get_edited_scene_root()
+		var local_scene: String = guard_root.scene_file_path if guard_root else ""
 		if not sender_scene.is_empty() and not local_scene.is_empty() and local_scene != sender_scene:
 			if VERBOSE_PACKET_LOG:
 				print("[%s] RECV: skipping '%s' — scene mismatch (local='%s' remote='%s')" % [
@@ -925,7 +953,8 @@ func _on_relay_message(sender_net_id: int, data: PackedByteArray) -> void:
 								_send_packet(ActionSerializerClass.serialize(reply))
 						else:
 							_send_packet(ActionSerializerClass.serialize(reply))
-						print("[%s] Sent crdt_sync for '%s' to peer who just opened it" % [PLUGIN_NAME, opened_script])
+						print("[%s] Sent crdt_sync for '%s' to peer who just opened it" % [
+							PLUGIN_NAME, opened_script])
 		"file_create":
 			var fc_path: String = action.get("data", {}).get("path", "")
 			var fc_ok := false
@@ -1085,9 +1114,9 @@ func _on_action_captured(action: Dictionary) -> void:
 		return
 	action["peer_id"] = _local_peer_id
 	action["peer_name"] = _local_peer_name
-	var _capture_root := EditorInterface.get_edited_scene_root()
-	if _capture_root:
-		action["scene_path"] = _capture_root.scene_file_path
+	var capture_root := EditorInterface.get_edited_scene_root()
+	if capture_root:
+		action["scene_path"] = capture_root.scene_file_path
 	var packet: PackedByteArray = ActionSerializerClass.serialize(action)
 	_send_packet(packet)
 
@@ -1118,7 +1147,8 @@ func _on_buffer_created(script_path: String) -> void:
 	# from _on_active_editor_changed, which overwrites our local bootstrap.
 	for pid in _peer_scripts:
 		if String(_peer_scripts[pid]) == script_path:
-			print("[%s] Skipping crdt_sync broadcast for '%s' — peer already has buffer" % [PLUGIN_NAME, script_path])
+			print("[%s] Skipping crdt_sync broadcast for '%s' — peer already has buffer" % [
+				PLUGIN_NAME, script_path])
 			return
 	var state: Dictionary = _script_sync.export_buffer(script_path)
 	if state.is_empty():
@@ -1207,7 +1237,8 @@ func _notify_same_file_if_needed(peer_id: String, peer_name: String, remote_file
 		return
 	var key := "%s:%s" % [peer_id, matched_file]
 	var now := Time.get_unix_time_from_system()
-	if _same_file_notified.has(key) and (now - float(_same_file_notified[key])) < _SAME_FILE_NOTIFY_COOLDOWN:
+	if _same_file_notified.has(key) \
+			and (now - float(_same_file_notified[key])) < _SAME_FILE_NOTIFY_COOLDOWN:
 		return
 	_same_file_notified[key] = now
 	var who := _peer_display_name(peer_id, peer_name)
@@ -1989,8 +2020,9 @@ func _relay_token(config: Dictionary) -> String:
 
 
 ## The Godot Manager token, but only for a relay run by the server that issued it
-## (same host as the backend URL), its explicit trusted relay, or this machine. Any other relay could claim
-## to need a backend login just to collect tokens, so it gets "".
+## (same host as the backend URL), its explicit trusted relay, or this machine.
+## Any other relay could claim to need a backend login just to collect tokens,
+## so it gets "".
 func _backend_token_for_relay(relay_url: String) -> String:
 	if _auth_bearer_token.is_empty() or _auth_client == null:
 		return ""
@@ -2002,7 +2034,8 @@ func _backend_token_for_relay(relay_url: String) -> String:
 	var settings: Dictionary = _auth_client.load_settings()
 	var backend_url := String(settings.get("backend_url", "")).strip_edges().trim_suffix("/")
 	# Only this exact secure relay may receive a Studio token across domains.
-	if backend_url == "https://studio.godaas.org" and relay_url.strip_edges() == NETWORK_DEFAULT_WS_URL:
+	if backend_url == "https://studio.godaas.org" \
+			and relay_url.strip_edges() == NETWORK_DEFAULT_WS_URL:
 		return _auth_bearer_token
 	if relay_host == _url_host(backend_url):
 		return _auth_bearer_token
@@ -2075,7 +2108,8 @@ func _try_silent_authenticate() -> void:
 	var mode := String(settings.get("auth_mode", "api_token"))
 	if mode != "api_token" or token.is_empty():
 		_dock.set_authenticated(false)
-		_dock.set_auth_status("Not authenticated. Add connection information and click Authenticate.", "info")
+		_dock.set_auth_status(
+			"Not authenticated. Add connection information and click Authenticate.", "info")
 		return
 	_dock.set_auth_busy(true)
 	_dock.set_auth_status("Verifying saved token...", "info")
@@ -2132,7 +2166,8 @@ func _on_dock_generate_token_requested(settings: Dictionary) -> void:
 	if not bool(auth_result.get("ok", false)):
 		_dock.set_auth_busy(false)
 		_auth_busy = false
-		_dock.set_auth_status(String(auth_result.get("error", "Authenticate first to generate a token.")), "error")
+		_dock.set_auth_status(String(auth_result.get(
+			"error", "Authenticate first to generate a token.")), "error")
 		return
 	var gen_result: Dictionary = await _auth_client.generate_api_token(settings)
 	_dock.set_auth_busy(false)
@@ -2183,7 +2218,8 @@ func _resolve_project_and_lock(user: Dictionary) -> void:
 		_dock.set_auth_status(String(projects_result.get("error", "Failed to load projects.")), "error")
 		return
 
-	var local_project_name := String(ProjectSettings.get_setting("application/config/name", "")).strip_edges()
+	var local_project_name := String(
+		ProjectSettings.get_setting("application/config/name", "")).strip_edges()
 	var backend_project_name := String(settings.get("backend_project_name", "")).strip_edges()
 	if backend_project_name.is_empty():
 		backend_project_name = local_project_name
@@ -2193,12 +2229,14 @@ func _resolve_project_and_lock(user: Dictionary) -> void:
 		_dock.set_auth_status("Backend project name is required.", "error")
 		return
 
-	var project_id: String = _auth_client.find_project_id_by_name(projects_result, backend_project_name)
+	var project_id: String = _auth_client.find_project_id_by_name(
+		projects_result, backend_project_name)
 	if project_id.is_empty():
 		_auth_bearer_token = ""
 		_dock.set_authenticated(false)
 		_dock.set_auth_status(
-			"No backend project matches '%s'. Check Backend project name in Settings." % backend_project_name,
+			"No backend project matches '%s'. Check Backend project name in Settings."
+				% backend_project_name,
 			"error"
 		)
 		return
@@ -2209,18 +2247,19 @@ func _resolve_project_and_lock(user: Dictionary) -> void:
 	_local_peer_name = email
 	# Flatten owned + shared projects into a single list for the room dropdown.
 	var all_projects: Array = []
-	var _own = projects_result.get("projects", [])
-	var _shared = projects_result.get("shared", [])
-	if _own is Array:
-		all_projects.append_array(_own)
-	if _shared is Array:
-		all_projects.append_array(_shared)
+	var owned_projects = projects_result.get("projects", [])
+	var shared_projects = projects_result.get("shared", [])
+	if owned_projects is Array:
+		all_projects.append_array(owned_projects)
+	if shared_projects is Array:
+		all_projects.append_array(shared_projects)
 	# Join the relay of the backend that issued the token: the only relay that can
 	# check it, and the only one _backend_token_for_relay will hand it to.
 	var relay_url := _relay_url_for_backend(String(settings.get("backend_url", "")))
 	_dock.apply_user_auth(email, project_id, relay_url, all_projects)
 	_dock.remember_relay_auth_mode(relay_url, RELAY_AUTH_BACKEND)
-	_dock.set_auth_status("Authenticated as %s — project '%s' ready." % [email, backend_project_name], "success")
+	_dock.set_auth_status("Authenticated as %s — project '%s' ready." % [
+		email, backend_project_name], "success")
 
 
 ## Warns once per peer and session when it speaks another protocol. Such a
@@ -2238,9 +2277,11 @@ func _check_peer_protocol(peer_id: String, peer_name: String, handshake: Diction
 		who, remote_version, PLUGIN_VERSION]
 	var details := ""
 	if remote_protocol < PROTOCOL_VERSION:
-		details = "%s has the older addon. Update GodotWithU in that project (or editor), then restart the editor." % who
+		details = ("%s has the older addon. Update GodotWithU in that project (or editor), "
+			+ "then restart the editor.") % who
 	else:
-		details = "This editor has the older addon. Update GodotWithU in this project, then restart the editor."
+		details = ("This editor has the older addon. Update GodotWithU in this project, "
+			+ "then restart the editor.")
 	push_warning("[%s] Protocol mismatch with %s: theirs %d (%s), ours %d (%s). %s" % [
 		PLUGIN_NAME, who, remote_protocol, remote_version, PROTOCOL_VERSION, PLUGIN_VERSION, details])
 	if Engine.is_editor_hint():
@@ -2249,13 +2290,15 @@ func _check_peer_protocol(peer_id: String, peer_name: String, handshake: Diction
 			toaster.push_toast(title, EditorToaster.SEVERITY_ERROR, details)
 
 
-func _show_peer_notification_toast(sender_peer_id: String, sender_peer_name: String, data: Dictionary) -> void:
+func _show_peer_notification_toast(
+		sender_peer_id: String, sender_peer_name: String, data: Dictionary) -> void:
 	if typeof(data) != TYPE_DICTIONARY:
 		return
 	var kind := String(data.get("kind", "")).strip_edges()
 	if kind.is_empty():
 		return
-	var payload: Dictionary = data.get("payload", {}) if typeof(data.get("payload", {})) == TYPE_DICTIONARY else {}
+	var payload: Dictionary = data.get("payload", {}) \
+			if typeof(data.get("payload", {})) == TYPE_DICTIONARY else {}
 	var who := _peer_display_name(sender_peer_id, sender_peer_name)
 
 	var title := ""
@@ -2346,9 +2389,7 @@ func _show_peer_notification_toast(sender_peer_id: String, sender_peer_name: Str
 			var raw_text := String(payload.get("message", "")).strip_edges()
 			details = raw_text
 
-	if not Engine.is_editor_hint():
-		return
-	var toaster := EditorInterface.get_editor_toaster()
-	if toaster == null:
-		return
-	toaster.push_toast(title, EditorToaster.SEVERITY_INFO, details)
+	if Engine.is_editor_hint():
+		var toaster := EditorInterface.get_editor_toaster()
+		if toaster:
+			toaster.push_toast(title, EditorToaster.SEVERITY_INFO, details)

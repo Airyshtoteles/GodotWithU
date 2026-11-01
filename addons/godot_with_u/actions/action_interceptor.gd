@@ -1,3 +1,4 @@
+# gdlint:disable=max-file-lines
 @tool
 # No global class_name: loaded by path via _instantiate_addon_script; declaring a
 # global class breaks the source-reload fallback on re-enable ("hides a global script class").
@@ -72,6 +73,31 @@ const SAFE_NODE_BASES: Array[String] = [
 	"WorldEnvironment", "NavigationRegion2D", "NavigationRegion3D",
 ]
 
+## Sentinel for a polled property not observed yet. A dedicated value avoids
+## colliding with a real null (e.g. a MeshInstance2D whose mesh is genuinely null).
+const PROP_CACHE_UNSET := "__prop_cache_unset__"
+## Xogot generic fallback polling (see the Xogot section below).
+const XOGOT_FALLBACK_SETTING := "godot_with_u/xogot_fallback"
+const XOGOT_FALLBACK_ENV := "GODOT_WITH_U_XOGOT"
+const GENERIC_POLL_EVERY_N_TICKS := 3   ## ~0.3 s at the 0.1 s transform tick
+## Properties already synced by dedicated mechanisms (transform poll, curated
+## resource poll, name/script signals). Never diffed generically — that would
+## double-emit and break apply-ordering guarantees (e.g. layout_mode vs size).
+const GENERIC_ALWAYS_SKIP: Dictionary = {
+	"owner": true, "name": true, "script": true, "multiplayer": true,
+	"scene_file_path": true, "unique_name_in_owner": true, "process_mode": true,
+	"position": true, "rotation": true, "rotation_degrees": true, "scale": true,
+	"transform": true, "skew": true, "rotation_edit_mode": true, "rotation_order": true,
+	"global_position": true, "global_rotation": true, "global_rotation_degrees": true,
+	"global_scale": true, "global_transform": true, "global_basis": true,
+	"global_skew": true, "quaternion": true, "basis": true, "top_level": true,
+}
+## Deferred retry queue limits (see _pending_actions).
+const PENDING_MAX_RETRIES := 8   ## ~0.4 s at 50 ms poll interval
+const PENDING_RESOURCE_MAX_RETRIES := 120   ## ~6 s for freshly imported files
+## Scene-sync guard length (see _scene_sync_ticks_remaining).
+const SCENE_SYNC_GUARD_TICKS := 40  ## ~2 s at 50 ms per tick
+
 # ── References ───────────────────────────────────────────────────────
 var _editor_plugin: EditorPlugin
 var _editor_selection: EditorSelection
@@ -108,9 +134,6 @@ var _script_cache: Dictionary = {}   ## rel_path → script_resource_path (or ""
 ## key = "rel_path::prop", value = resource_path string (resources)
 ##                                  or raw Variant for primitives.
 ## A missing key (or PROP_CACHE_UNSET) means "not yet observed".
-## Using a dedicated sentinel avoids colliding with a real null value
-## (e.g. a MeshInstance2D whose mesh property is genuinely null).
-const PROP_CACHE_UNSET := "__prop_cache_unset__"
 var _resource_prop_cache: Dictionary = {}
 var _resource_prop_value_cache: Dictionary = {}   ## "rel_path::prop" → last Variant
 
@@ -126,21 +149,6 @@ var _resource_prop_value_cache: Dictionary = {}   ## "rel_path::prop" → last V
 ## Auto-enabled on iOS; force it on from desktop for testing via the
 ## GODOT_WITH_U_XOGOT=1 env var, the `godot_with_u/xogot_fallback`
 ## project setting, or set_xogot_fallback().
-const XOGOT_FALLBACK_SETTING := "godot_with_u/xogot_fallback"
-const XOGOT_FALLBACK_ENV := "GODOT_WITH_U_XOGOT"
-const GENERIC_POLL_EVERY_N_TICKS := 3   ## ~0.3 s at the 0.1 s transform tick
-## Properties already synced by dedicated mechanisms (transform poll, curated
-## resource poll, name/script signals). Never diffed generically — that would
-## double-emit and break apply-ordering guarantees (e.g. layout_mode vs size).
-const GENERIC_ALWAYS_SKIP: Dictionary = {
-	"owner": true, "name": true, "script": true, "multiplayer": true,
-	"scene_file_path": true, "unique_name_in_owner": true, "process_mode": true,
-	"position": true, "rotation": true, "rotation_degrees": true, "scale": true,
-	"transform": true, "skew": true, "rotation_edit_mode": true, "rotation_order": true,
-	"global_position": true, "global_rotation": true, "global_rotation_degrees": true,
-	"global_scale": true, "global_transform": true, "global_basis": true,
-	"global_skew": true, "quaternion": true, "basis": true, "top_level": true,
-}
 var _xogot_fallback: bool = false
 var _generic_prop_cache: Dictionary = {}   ## "rel_path::prop" → last token
 var _generic_prop_value_cache: Dictionary = {}  ## "rel_path::prop" → last allowed value
@@ -155,7 +163,8 @@ var _remote_scene_guides_changed: bool = false
 
 # ── Node name (rename) polling ─────────────────────────────────────
 var _name_cache: Dictionary = {}   ## instance_id(int) → {name: String, rel_path: String}
-var _parent_cache: Dictionary = {} ## instance_id(int) → {parent_path: String, child_index: int, rel_path: String}
+## instance_id(int) → {parent_path: String, child_index: int, rel_path: String}
+var _parent_cache: Dictionary = {}
 
 # ── Locked-node rollback snapshots ─────────────────────────────────
 var _group_cache: Dictionary = {}              ## rel_path → sorted Array[String]
@@ -168,8 +177,6 @@ var _last_allowed_selection_paths: Array[String] = []
 ## Actions targeting a node that wasn't found are held here and retried
 ## each poll tick until the node appears or the retry limit is reached.
 var _pending_actions: Array[Dictionary] = []
-const PENDING_MAX_RETRIES := 8   ## ~0.4 s at 50 ms poll interval
-const PENDING_RESOURCE_MAX_RETRIES := 120   ## ~6 s for freshly imported files
 
 # ── Scene-sync guard ──────────────────────────────────────────────────
 ## When > 0, local emission (polls + signal handlers) is suppressed so
@@ -178,7 +185,6 @@ const PENDING_RESOURCE_MAX_RETRIES := 120   ## ~6 s for freshly imported files
 ## also cleared immediately when the first remote node_add/property
 ## arrives (remote state is here — safe to start emitting again).
 var _scene_sync_ticks_remaining: int = 0
-const SCENE_SYNC_GUARD_TICKS := 40  ## ~2 s at 50 ms per tick
 
 ## Called by the plugin when the local peer opens a scene that at least
 ## one connected peer already has open (they are the source of truth).
@@ -632,7 +638,8 @@ func _notify_lock_blocked(locked_path: String, change: String) -> void:
 			owner = String(_lock_manager.get_lock_owner(locked_path))
 	var key := locked_path + "::" + change
 	var now := Time.get_unix_time_from_system()
-	if _lock_warning_last.has(key) and now - float(_lock_warning_last[key]) < LOCK_WARNING_COOLDOWN_SEC:
+	if _lock_warning_last.has(key) \
+			and now - float(_lock_warning_last[key]) < LOCK_WARNING_COOLDOWN_SEC:
 		return
 	_lock_warning_last[key] = now
 	push_warning("[%s] BLOCKED %s: '%s' locked by '%s'" % [
@@ -734,8 +741,8 @@ func emit_selection_heartbeat() -> void:
 
 
 func _on_node_added(node: Node) -> void:
-	if _suppress: return
-	if _scene_sync_ticks_remaining > 0: return  # remote is source of truth while guard active
+	# The remote is the source of truth while the scene-sync guard is active.
+	if _suppress or _scene_sync_ticks_remaining > 0: return
 
 	var root := EditorInterface.get_edited_scene_root()
 	if not root: return
@@ -743,8 +750,7 @@ func _on_node_added(node: Node) -> void:
 	# node.owner is NOT set yet when this signal fires. So we check
 	# the PARENT instead — its owner IS already correct.
 	var parent := node.get_parent()
-	if not parent: return
-	if parent != root and parent.owner != root: return
+	if not parent or (parent != root and parent.owner != root): return
 	# Nodes that belong to an instanced sub-scene are replicated as part of
 	# that instance's PackedScene (see "scene_instance" below) — never as
 	# standalone node_add packets, or we would duplicate the instance content.
@@ -809,9 +815,9 @@ func _on_node_added(node: Node) -> void:
 	# Seed the script cache so the poll doesn't false-emit script_attach
 	# on its first observation of this node (every node starts unscripted
 	# from the perspective of the poll until seeded here).
-	var _node_script_seed = node.get_script()
-	if _node_script_seed and _node_script_seed is Script:
-		_script_cache[rel_path] = (_node_script_seed as Script).resource_path
+	var node_script_seed = node.get_script()
+	if node_script_seed and node_script_seed is Script:
+		_script_cache[rel_path] = (node_script_seed as Script).resource_path
 	else:
 		_script_cache[rel_path] = ""
 
@@ -822,9 +828,7 @@ func _on_node_added(node: Node) -> void:
 
 
 func _on_node_renamed(node: Node) -> void:
-	if _suppress: return
-	if _scene_sync_ticks_remaining > 0: return
-	if not _is_edited_scene_node(node): return
+	if _suppress or _scene_sync_ticks_remaining > 0 or not _is_edited_scene_node(node): return
 	var root := EditorInterface.get_edited_scene_root()
 	if not root: return
 
@@ -916,27 +920,10 @@ func _on_node_removed(node: Node) -> void:
 
 func _on_inspector_property_changed(_undo_redo: Object, modified_object: Object,
 		property: String, new_value: Variant) -> bool:
-	if _suppress: return false
-	if _scene_sync_ticks_remaining > 0: return false
+	if _suppress or _scene_sync_ticks_remaining > 0: return false
 
-	# Sub-resource edited in the Inspector (e.g. changing SphereMesh.radius).
-	# modified_object is the Resource, not the owning Node.  We schedule a
-	# deferred emit so the post-commit value is captured.
 	if not (modified_object is Node):
-		if modified_object is Resource:
-			var old_resource_value: Variant = (modified_object as Resource).get(property)
-			var owner_path := _find_scene_node_path_owning_resource(modified_object as Resource)
-			if not owner_path.is_empty() and _block_if_locked(owner_path, "resource property"):
-				call_deferred(
-					"_restore_locked_resource_property",
-					modified_object,
-					property,
-					old_resource_value,
-					owner_path
-				)
-				return true
-			_schedule_inline_resource_emit(modified_object as Resource)
-		return false
+		return _on_inspector_resource_property_changed(modified_object, property)
 
 	var node: Node = modified_object as Node
 	if not _is_edited_scene_node(node): return false
@@ -957,20 +944,38 @@ func _on_inspector_property_changed(_undo_redo: Object, modified_object: Object,
 		return false
 
 	var encoded := ActionSerializerClass.encode_property_value(new_value)
-	if not bool(encoded.get("ok", false)):
-		return false
+	if bool(encoded.get("ok", false)):
+		_emit({
+			"type": "property",
+			"peer_id": _peer_id,
+			"timestamp": Time.get_unix_time_from_system(),
+			"node_path": rel_path,
+			"data": {
+				"property": property,
+				"value": encoded.get("value"),
+			},
+		})
+	return false
 
-	var action := {
-		"type": "property",
-		"peer_id": _peer_id,
-		"timestamp": Time.get_unix_time_from_system(),
-		"node_path": rel_path,
-		"data": {
-			"property": property,
-			"value": encoded.get("value"),
-		},
-	}
-	_emit(action)
+
+## Sub-resource edited in the Inspector (e.g. changing SphereMesh.radius).
+## modified_object is the Resource, not the owning Node.  We schedule a
+## deferred emit so the post-commit value is captured.
+func _on_inspector_resource_property_changed(modified_object: Object, property: String) -> bool:
+	if not (modified_object is Resource):
+		return false
+	var old_resource_value: Variant = (modified_object as Resource).get(property)
+	var owner_path := _find_scene_node_path_owning_resource(modified_object as Resource)
+	if not owner_path.is_empty() and _block_if_locked(owner_path, "resource property"):
+		call_deferred(
+			"_restore_locked_resource_property",
+			modified_object,
+			property,
+			old_resource_value,
+			owner_path
+		)
+		return true
+	_schedule_inline_resource_emit(modified_object as Resource)
 	return false
 
 
@@ -1234,7 +1239,8 @@ func apply_remote_action(action: Dictionary) -> void:
 	# already had the scene open → we've received authoritative data,
 	# clear the sync guard so local polling can resume immediately.
 	var action_type_for_guard: String = action.get("type", "")
-	if _scene_sync_ticks_remaining > 0 and action_type_for_guard in ["node_add", "property", "scene_guides", "scene_state"]:
+	if _scene_sync_ticks_remaining > 0 \
+			and action_type_for_guard in ["node_add", "property", "scene_guides", "scene_state"]:
 		_scene_sync_ticks_remaining = 0
 		print("[%s] Scene sync guard cleared by remote %s" % [TAG, action_type_for_guard])
 
@@ -1402,7 +1408,8 @@ func _commit_property_changes(changes: Array, label: String) -> void:
 func _after_property_applied(target: Node, prop: String, value: Variant, rel_path: String) -> void:
 	if target is AnimationPlayer and prop.begins_with("libraries/"):
 		target.notify_property_list_changed()
-	if target is AnimationPlayer and prop in _get_animation_player_sync_props(target as AnimationPlayer):
+	if target is AnimationPlayer \
+			and prop in _get_animation_player_sync_props(target as AnimationPlayer):
 		if prop == "autoplay":
 			_select_autoplay_animation_if_present(target, value, rel_path)
 		target.notify_property_list_changed()
@@ -1589,7 +1596,8 @@ func _apply_node_add(action: Dictionary, root: Node) -> void:
 
 	# Check if node already exists — use _resolve_node so a node renamed to
 	# "ok 🔒" by the lock overlay is still found when the incoming name is "ok".
-	var expected_rel: String = (parent_rel + "/" + node_name) if (parent_rel != "" and parent_rel != ".") else node_name
+	var expected_rel: String = (parent_rel + "/" + node_name) \
+			if (parent_rel != "" and parent_rel != ".") else node_name
 	if _resolve_node(root, expected_rel) != null:
 		return
 
@@ -2518,20 +2526,20 @@ func _poll_transforms() -> void:
 	_name_cache = new_name_cache
 	_parent_cache = new_parent_cache
 	# Prune _child_order_cache entries for nodes that no longer exist.
-	var _live_paths: Dictionary = {}
+	var live_paths: Dictionary = {}
 	for _n in nodes:
 		if _n != root:
-			_live_paths[_clean_path(str(root.get_path_to(_n)))] = true
+			live_paths[_clean_path(str(root.get_path_to(_n)))] = true
 		else:
-			_live_paths["."] = true
+			live_paths["."] = true
 	for _p in _child_order_cache.keys().duplicate():
-		if not _live_paths.has(_p):
+		if not live_paths.has(_p):
 			_child_order_cache.erase(_p)
 	for _p in _group_cache.keys().duplicate():
-		if not _live_paths.has(_p):
+		if not live_paths.has(_p):
 			_group_cache.erase(_p)
 	for _p in _signal_connection_cache.keys().duplicate():
-		if not _live_paths.has(_p):
+		if not live_paths.has(_p):
 			_signal_connection_cache.erase(_p)
 	# NOTE: _remote_changed_paths is cleared at the end of _poll_resource_properties
 	# so it remains valid for the resource/name pollers running in the same tick.

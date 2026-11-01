@@ -372,6 +372,11 @@ func _is_scene_tree_widget(tree: Tree) -> bool:
 	var root_item := tree.get_root()
 	if not root_item:
 		return false
+	return _tree_shows_tracked_paths(root_item)
+
+
+## True when the tree under root_item shows a highlighted or decorated node path.
+func _tree_shows_tracked_paths(root_item: TreeItem) -> bool:
 	for path in _highlighted_paths:
 		if _find_tree_item_for_path(root_item, path):
 			return true

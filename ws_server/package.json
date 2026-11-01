@@ -1,7 +1,7 @@
 {
   "name": "godot-with-u-ws-relay",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "WebSocket relay server for GodotWithU.",
   "main": "ws_relay_server.js",
   "scripts": {

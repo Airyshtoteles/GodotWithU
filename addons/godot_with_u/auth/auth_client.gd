@@ -56,11 +56,13 @@ func load_settings() -> Dictionary:
 func save_settings(settings: Dictionary) -> Dictionary:
 	var normalized := normalize_settings(settings)
 	var config := ConfigFile.new()
-	config.set_value(SETTINGS_SECTION, "backend_url", normalized.get("backend_url", DEFAULT_BACKEND_URL))
+	config.set_value(
+		SETTINGS_SECTION, "backend_url", normalized.get("backend_url", DEFAULT_BACKEND_URL))
 	config.set_value(SETTINGS_SECTION, "auth_mode", normalized.get("auth_mode", AUTH_MODE_API_TOKEN))
 	config.set_value(SETTINGS_SECTION, "identifier", normalized.get("identifier", ""))
 	config.set_value(SETTINGS_SECTION, "api_token", normalized.get("api_token", ""))
-	config.set_value(SETTINGS_SECTION, "backend_project_name", normalized.get("backend_project_name", ""))
+	config.set_value(
+		SETTINGS_SECTION, "backend_project_name", normalized.get("backend_project_name", ""))
 	config.save(SETTINGS_PATH)
 	return normalized
 
@@ -70,7 +72,8 @@ func normalize_settings(settings: Dictionary) -> Dictionary:
 	if auth_mode != AUTH_MODE_PASSWORD:
 		auth_mode = AUTH_MODE_API_TOKEN
 	return {
-		"backend_url": _normalize_backend_url(String(settings.get("backend_url", DEFAULT_BACKEND_URL)).strip_edges()),
+		"backend_url": _normalize_backend_url(
+			String(settings.get("backend_url", DEFAULT_BACKEND_URL)).strip_edges()),
 		"auth_mode": auth_mode,
 		"identifier": String(settings.get("identifier", "")).strip_edges(),
 		"api_token": String(settings.get("api_token", "")).strip_edges(),
@@ -93,27 +96,26 @@ func _normalize_backend_url(value: String) -> String:
 func ensure_authenticated(settings: Dictionary, password: String = "") -> Dictionary:
 	var normalized := normalize_settings(settings)
 	var auth_mode := String(normalized.get("auth_mode", AUTH_MODE_API_TOKEN))
-
 	if auth_mode == AUTH_MODE_API_TOKEN:
-		_cookie_header = ""
-		var token := String(normalized.get("api_token", "")).strip_edges()
-		if token.is_empty():
-			_bearer_token = ""
-			return { "ok": false, "error": "API token is required." }
-		_bearer_token = token
-		var me: Dictionary = await _request_json(normalized, "/api/me")
-		if not bool(me.get("ok", false)):
-			_bearer_token = ""
-			return { "ok": false, "error": _response_error(me, "API token authentication failed.") }
-		var user_data: Dictionary = {}
-		var me_json = me.get("json", null)
-		if typeof(me_json) == TYPE_DICTIONARY:
-			var u = me_json.get("user", {})
-			if typeof(u) == TYPE_DICTIONARY:
-				user_data = u
-		return { "ok": true, "user": user_data, "token": _bearer_token }
+		return await _authenticate_with_token(normalized)
+	return await _authenticate_with_password(normalized, password)
 
-	# password mode
+
+func _authenticate_with_token(normalized: Dictionary) -> Dictionary:
+	_cookie_header = ""
+	var token := String(normalized.get("api_token", "")).strip_edges()
+	if token.is_empty():
+		_bearer_token = ""
+		return { "ok": false, "error": "API token is required." }
+	_bearer_token = token
+	var me: Dictionary = await _request_json(normalized, "/api/me")
+	if not bool(me.get("ok", false)):
+		_bearer_token = ""
+		return { "ok": false, "error": _response_error(me, "API token authentication failed.") }
+	return { "ok": true, "user": _user_from_me(me), "token": _bearer_token }
+
+
+func _authenticate_with_password(normalized: Dictionary, password: String) -> Dictionary:
 	var identifier := String(normalized.get("identifier", "")).strip_edges()
 	if identifier.is_empty() or password.is_empty():
 		return { "ok": false, "error": "Email/username and password are required." }
@@ -125,13 +127,17 @@ func ensure_authenticated(settings: Dictionary, password: String = "") -> Dictio
 		_bearer_token = ""
 		_cookie_header = ""
 		return { "ok": false, "error": _response_error(me_resp, "Login verification failed.") }
-	var user: Dictionary = {}
-	var me_json2 = me_resp.get("json", null)
-	if typeof(me_json2) == TYPE_DICTIONARY:
-		var uu = me_json2.get("user", {})
-		if typeof(uu) == TYPE_DICTIONARY:
-			user = uu
-	return { "ok": true, "user": user, "token": _bearer_token }
+	return { "ok": true, "user": _user_from_me(me_resp), "token": _bearer_token }
+
+
+## The "user" object of an /api/me response, or {} when it is missing.
+func _user_from_me(me_resp: Dictionary) -> Dictionary:
+	var me_json = me_resp.get("json", null)
+	if typeof(me_json) == TYPE_DICTIONARY:
+		var user = me_json.get("user", {})
+		if typeof(user) == TYPE_DICTIONARY:
+			return user
+	return {}
 
 
 ## Fetches the user's accessible projects. Returns
@@ -180,7 +186,8 @@ func find_project_id_by_name(projects_payload: Dictionary, project_name: String)
 func generate_api_token(settings: Dictionary) -> Dictionary:
 	var normalized := normalize_settings(settings)
 	var body := JSON.stringify({"name": "GodotWithU Auto Token"})
-	var resp: Dictionary = await _request_json(normalized, "/api/auth/apikeys", HTTPClient.METHOD_POST, body)
+	var resp: Dictionary = await _request_json(
+		normalized, "/api/auth/apikeys", HTTPClient.METHOD_POST, body)
 	if not bool(resp.get("ok", false)):
 		return { "ok": false, "error": _response_error(resp, "Token generation failed.") }
 	var json = resp.get("json", {})
@@ -200,7 +207,8 @@ func generate_api_token(settings: Dictionary) -> Dictionary:
 ## Fire-and-forget: POST an activity ping to /api/projects/ping so the React
 ## manager shows the local user as "online" while a GWU session is active.
 ## Pass disconnect=true to explicitly mark the user offline.
-func post_activity_ping(project_name: String, open_files: Array, disconnect: bool = false, metadata: Dictionary = {}) -> void:
+func post_activity_ping(project_name: String, open_files: Array, disconnect: bool = false,
+		metadata: Dictionary = {}) -> void:
 	if _bearer_token.is_empty() and _cookie_header.is_empty():
 		return
 	if project_name.is_empty():
@@ -219,13 +227,15 @@ func post_activity_ping(project_name: String, open_files: Array, disconnect: boo
 
 ## Blocking variant — safe to call from _exit_tree during Godot shutdown.
 ## Does not require the scene tree; uses raw HTTPClient with OS.delay_msec.
-func post_activity_ping_blocking(project_name: String, disconnect: bool = false, metadata: Dictionary = {}) -> void:
+func post_activity_ping_blocking(project_name: String, disconnect: bool = false,
+		metadata: Dictionary = {}) -> void:
 	if _bearer_token.is_empty() and _cookie_header.is_empty():
 		return
 	if project_name.is_empty():
 		return
 	var settings := load_settings()
-	var backend_url: String = _normalize_backend_url(String(settings.get("backend_url", DEFAULT_BACKEND_URL)))
+	var backend_url: String = _normalize_backend_url(
+		String(settings.get("backend_url", DEFAULT_BACKEND_URL)))
 	var url := backend_url + "/api/projects/ping"
 	var body_dict: Dictionary = { "project": project_name }
 	for key in metadata.keys():
@@ -243,7 +253,8 @@ func post_activity_ping_blocking(project_name: String, disconnect: bool = false,
 	_http_request_blocking(url, HTTPClient.METHOD_POST, headers, JSON.stringify(body_dict), 2.0)
 
 
-func _http_request_blocking(url: String, method: int, headers: PackedStringArray, body: String, timeout_sec: float) -> void:
+func _http_request_blocking(url: String, method: int, headers: PackedStringArray, body: String,
+		timeout_sec: float) -> void:
 	var parsed := _parse_http_url(url)
 	if parsed.is_empty():
 		return
@@ -251,13 +262,15 @@ func _http_request_blocking(url: String, method: int, headers: PackedStringArray
 	var use_tls := String(parsed.get("scheme", "")) == "https"
 	var err: int
 	if use_tls:
-		err = client.connect_to_host(String(parsed.get("host", "")), int(parsed.get("port", 443)), TLSOptions.client())
+		err = client.connect_to_host(
+			String(parsed.get("host", "")), int(parsed.get("port", 443)), TLSOptions.client())
 	else:
 		err = client.connect_to_host(String(parsed.get("host", "")), int(parsed.get("port", 80)))
 	if err != OK:
 		return
 	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
-	while client.get_status() == HTTPClient.STATUS_RESOLVING or client.get_status() == HTTPClient.STATUS_CONNECTING:
+	while client.get_status() == HTTPClient.STATUS_RESOLVING \
+			or client.get_status() == HTTPClient.STATUS_CONNECTING:
 		client.poll()
 		if Time.get_ticks_msec() >= deadline:
 			client.close()
@@ -319,7 +332,8 @@ func post_collab_presence(project_id: String, file_path: String, peer_name: Stri
 		"file_path": file_path,
 		"peer_name": peer_name,
 	})
-	await _request_json(settings, "/api/projects/%s/collab/presence" % project_id, HTTPClient.METHOD_POST, body)
+	await _request_json(
+		settings, "/api/projects/%s/collab/presence" % project_id, HTTPClient.METHOD_POST, body)
 
 
 ## Fire-and-forget: POST a disconnection event to the backend so all project
@@ -333,7 +347,8 @@ func post_disconnection_event(project_id: String, peer_name: String) -> void:
 	var body := JSON.stringify({
 		"peer_name": peer_name,
 	})
-	await _request_json(settings, "/api/projects/%s/collab/disconnect" % project_id, HTTPClient.METHOD_POST, body)
+	await _request_json(
+		settings, "/api/projects/%s/collab/disconnect" % project_id, HTTPClient.METHOD_POST, body)
 
 
 func _login_backend(settings: Dictionary, identifier: String, password: String) -> Dictionary:
@@ -365,17 +380,20 @@ func _login_backend(settings: Dictionary, identifier: String, password: String) 
 
 # ─── HTTP helpers ─────────────────────────────────────────
 
-func _request_json(settings: Dictionary, endpoint_path: String, method: int = HTTPClient.METHOD_GET, request_body: String = "") -> Dictionary:
+func _request_json(settings: Dictionary, endpoint_path: String,
+		method: int = HTTPClient.METHOD_GET, request_body: String = "") -> Dictionary:
 	var headers := PackedStringArray(["Accept: application/json"])
 	if not request_body.is_empty():
 		headers.append("Content-Type: application/json")
 	for header in _build_auth_headers():
 		headers.append(header)
-	return await _perform_http_request(_build_endpoint_url(settings, endpoint_path), method, headers, request_body)
+	return await _perform_http_request(
+		_build_endpoint_url(settings, endpoint_path), method, headers, request_body)
 
 
 func _build_endpoint_url(settings: Dictionary, endpoint_path: String) -> String:
-	var base_url := _normalize_backend_url(String(settings.get("backend_url", DEFAULT_BACKEND_URL)).strip_edges())
+	var base_url := _normalize_backend_url(
+		String(settings.get("backend_url", DEFAULT_BACKEND_URL)).strip_edges())
 	var path_part := String(endpoint_path).strip_edges()
 	if not path_part.begins_with("/"):
 		path_part = "/" + path_part
@@ -423,7 +441,8 @@ func _build_auth_headers() -> PackedStringArray:
 	return headers
 
 
-func _perform_http_request(url: String, method: int, headers: PackedStringArray, request_body: String = "") -> Dictionary:
+func _perform_http_request(url: String, method: int, headers: PackedStringArray,
+		request_body: String = "") -> Dictionary:
 	if _http_parent == null:
 		return { "ok": false, "error": "Auth client not attached." }
 	var request := HTTPRequest.new()
@@ -478,7 +497,8 @@ func _parse_json_response(body_text: String, response_headers: Dictionary) -> Va
 	if stripped.is_empty():
 		return null
 	var content_type := String(response_headers.get("content-type", "")).to_lower()
-	if content_type.find("json") == -1 and not stripped.begins_with("{") and not stripped.begins_with("["):
+	if content_type.find("json") == -1 \
+			and not stripped.begins_with("{") and not stripped.begins_with("["):
 		return null
 	var parser := JSON.new()
 	if parser.parse(stripped) != OK:

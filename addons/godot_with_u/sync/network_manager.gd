@@ -100,11 +100,13 @@ func join_enet(ip: String, port: int) -> Error:
 	return err
 
 
-func host_websocket(server_url: String, room: String, peer_name: String = "", auth_token: String = "") -> Error:
+func host_websocket(server_url: String, room: String, peer_name: String = "",
+		auth_token: String = "") -> Error:
 	return _connect_websocket(server_url, room, "host", peer_name, auth_token)
 
 
-func join_websocket(server_url: String, room: String, peer_name: String = "", auth_token: String = "") -> Error:
+func join_websocket(server_url: String, room: String, peer_name: String = "",
+		auth_token: String = "") -> Error:
 	return _connect_websocket(server_url, room, "client", peer_name, auth_token)
 
 
@@ -259,7 +261,8 @@ func poll_messages() -> Array:
 func is_active() -> bool:
 	match _transport:
 		TRANSPORT_ENET:
-			return _enet_peer != null and _enet_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
+			return _enet_peer != null \
+					and _enet_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
 		TRANSPORT_WEBSOCKET:
 			return _ws_peer != null and _ws_peer.get_ready_state() != WebSocketPeer.STATE_CLOSED
 	return false
@@ -312,7 +315,8 @@ func _poll_enet_messages() -> Array:
 	return received
 
 
-func _connect_websocket(server_url: String, room: String, role: String, peer_name: String = "", auth_token: String = "") -> Error:
+func _connect_websocket(server_url: String, room: String, role: String, peer_name: String = "",
+		auth_token: String = "") -> Error:
 	stop()
 	_transport = TRANSPORT_WEBSOCKET
 	_ws_peer = WebSocketPeer.new()

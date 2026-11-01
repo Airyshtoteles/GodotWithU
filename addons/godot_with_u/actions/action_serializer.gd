@@ -88,7 +88,8 @@ static func should_send_resource_snapshot(resource: Resource) -> bool:
 		or resource is Animation
 
 
-static func _encode_resource_snapshot(resource: Resource, kind: String, depth: int = 0) -> Dictionary:
+static func _encode_resource_snapshot(
+		resource: Resource, kind: String, depth: int = 0) -> Dictionary:
 	var inline := _encode_inline_resource(resource, depth)
 	if not bool(inline.get("ok", false)):
 		return inline

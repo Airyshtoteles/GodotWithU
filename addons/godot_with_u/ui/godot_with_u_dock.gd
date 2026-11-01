@@ -1,3 +1,4 @@
+# gdlint:disable=max-public-methods,max-file-lines
 @tool
 # No global class_name: loaded by path via _instantiate_addon_script; declaring a
 # global class breaks the source-reload fallback on re-enable ("hides a global script class").
@@ -28,6 +29,9 @@ const RELAY_AUTH_BACKEND := "backend"
 const TONE_SUCCESS := Color(0.45, 0.85, 0.55)
 const TONE_ERROR := Color(1.0, 0.45, 0.45)
 const TONE_INFO := Color(0.65, 0.75, 1.0)
+const _SETTING_FILE_SYNC := "godot_with_u/sync_scene_files"
+const _SETTING_GD_SYNC   := "godot_with_u/sync_gd_files"
+const _SETTING_RELAY_AUTH_MODES := "godot_with_u/relay_auth_modes"
 
 var _status_label: RichTextLabel
 var _peer_list: ItemList
@@ -79,9 +83,6 @@ var _auto_filled_email := ""
 var _auto_filled_room := ""
 var _auto_filled_url := ""
 
-const _SETTING_FILE_SYNC := "godot_with_u/sync_scene_files"
-const _SETTING_GD_SYNC   := "godot_with_u/sync_gd_files"
-const _SETTING_RELAY_AUTH_MODES := "godot_with_u/relay_auth_modes"
 var _enet_address: String = "127.0.0.1"
 var _ws_url: String = DEFAULT_WS_URL
 var _session_state := {
@@ -119,10 +120,10 @@ func _build_ui() -> void:
 	main.add_child(_auth_separator)
 
 	# Status
-	var _sync_title := Label.new()
-	_sync_title.text = "Synchronisation"
-	_sync_title.add_theme_font_size_override("font_size", 22)
-	main.add_child(_sync_title)
+	var sync_title := Label.new()
+	sync_title.text = "Synchronisation"
+	sync_title.add_theme_font_size_override("font_size", 22)
+	main.add_child(sync_title)
 	_status_label = RichTextLabel.new()
 	_status_label.bbcode_enabled = true
 	_status_label.fit_content = true
@@ -256,13 +257,15 @@ func _build_ui() -> void:
 
 	_all_sync_checkbox = CheckBox.new()
 	_all_sync_checkbox.text = "Sync all files"
-	_all_sync_checkbox.tooltip_text = "Auto-sync ALL file types (scenes, scripts, resources…) with all peers"
+	_all_sync_checkbox.tooltip_text = \
+		"Auto-sync ALL file types (scenes, scripts, resources…) with all peers"
 	_all_sync_checkbox.button_pressed = true
 	main.add_child(_all_sync_checkbox)
 
 	_file_sync_checkbox = CheckBox.new()
 	_file_sync_checkbox.text = "Sync new scene files"
-	_file_sync_checkbox.tooltip_text = "Auto-sync .tscn/.tres file creates, deletes and renames with all peers"
+	_file_sync_checkbox.tooltip_text = \
+		"Auto-sync .tscn/.tres file creates, deletes and renames with all peers"
 	main.add_child(_file_sync_checkbox)
 
 	_gd_sync_checkbox = CheckBox.new()
@@ -272,7 +275,8 @@ func _build_ui() -> void:
 
 	_activity_ping_checkbox = CheckBox.new()
 	_activity_ping_checkbox.text = "Show as online in manager"
-	_activity_ping_checkbox.tooltip_text = "Periodically ping the backend so the Godaas manager shows you as online while a session is active"
+	_activity_ping_checkbox.tooltip_text = ("Periodically ping the backend so the Godaas "
+		+ "manager shows you as online while a session is active")
 	_activity_ping_checkbox.button_pressed = true
 	main.add_child(_activity_ping_checkbox)
 
@@ -294,7 +298,7 @@ func _build_ui() -> void:
 	main.add_child(HSeparator.new())
 
 	_info_label = Label.new()
-	_info_label.text = "v0.7.0"
+	_info_label.text = "v0.8.0"
 	_info_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.4))
 	_info_label.add_theme_font_size_override("font_size", 20)
 	_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -309,7 +313,8 @@ func _ready() -> void:
 	_file_sync_checkbox.toggled.connect(_on_sync_setting_changed.unbind(1))
 	_gd_sync_checkbox.toggled.connect(_on_sync_setting_changed.unbind(1))
 	_peer_name_input.text = _detect_default_peer_name()
-	var default_room := str(ProjectSettings.get_setting("application/config/name", "default")).strip_edges()
+	var default_room := str(
+		ProjectSettings.get_setting("application/config/name", "default")).strip_edges()
 	_room_input.text = default_room if not default_room.is_empty() else "default"
 	# Default to WebSocket relay on all platforms (was: only on web).
 	# _sync_transport_fields also shows what the selected relay asks for.
@@ -470,11 +475,21 @@ func _get_default_backend_project_name() -> String:
 
 func get_auth_settings() -> Dictionary:
 	return {
-		"backend_url": String(_auth_backend_input.text if _auth_backend_input != null else DEFAULT_BACKEND_URL).strip_edges(),
-		"auth_mode": AUTH_MODE_PASSWORD if (_auth_mode_option != null and _auth_mode_option.selected == 1) else AUTH_MODE_API_TOKEN,
-		"identifier": String(_auth_identifier_input.text if _auth_identifier_input != null else "").strip_edges(),
+		"backend_url": String(
+			_auth_backend_input.text if _auth_backend_input != null else DEFAULT_BACKEND_URL
+		).strip_edges(),
+		"auth_mode": (
+			AUTH_MODE_PASSWORD if (_auth_mode_option != null and _auth_mode_option.selected == 1)
+			else AUTH_MODE_API_TOKEN
+		),
+		"identifier": String(
+			_auth_identifier_input.text if _auth_identifier_input != null else ""
+		).strip_edges(),
 		"api_token": String(_auth_token_input.text if _auth_token_input != null else "").strip_edges(),
-		"backend_project_name": String(_auth_project_name_input.text if _auth_project_name_input != null else _get_default_backend_project_name()).strip_edges(),
+		"backend_project_name": String(
+			_auth_project_name_input.text if _auth_project_name_input != null
+			else _get_default_backend_project_name()
+		).strip_edges(),
 	}
 
 
@@ -552,7 +567,8 @@ func set_authenticated(authenticated: bool) -> void:
 ## Auto-fill pseudo/transport/URL/room from the authenticated user + their project
 ## record. Shows a dropdown of all user projects so they can pick which one to join.
 ## The relay verifies access using the same data.
-func apply_user_auth(user_email: String, project_id: String, relay_url: String = "", projects: Array = []) -> void:
+func apply_user_auth(user_email: String, project_id: String, relay_url: String = "",
+		projects: Array = []) -> void:
 	_auto_filled = true
 	_auto_filled_email = user_email
 	_auto_filled_room = project_id
@@ -681,7 +697,8 @@ func _hint_for(on_relay: bool, mode: String) -> String:
 		RELAY_AUTH_BACKEND:
 			if _auth_authenticated:
 				return "Choose a project, then click Join."
-			return "💡 This relay needs a Godot Manager account: log in above, or enter the URL of another relay."
+			return ("💡 This relay needs a Godot Manager account: log in above, "
+				+ "or enter the URL of another relay.")
 		RELAY_AUTH_PASSWORD:
 			return "💡 Enter the relay password, then click Join."
 		RELAY_AUTH_NONE:
@@ -925,7 +942,9 @@ func _build_connection_config() -> Dictionary:
 		"server_url": _ws_url,
 		"room": room,
 		"relay_auth_mode": get_relay_auth_mode(),
-		"relay_password": _relay_password_input.text.strip_edges() if _relay_password_input != null else "",
+		"relay_password": (
+			_relay_password_input.text.strip_edges() if _relay_password_input != null else ""
+		),
 	}
 
 

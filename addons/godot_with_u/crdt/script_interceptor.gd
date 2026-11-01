@@ -1,3 +1,4 @@
+# gdlint:disable=max-file-lines
 @tool
 # No global class_name: loaded by path via _instantiate_addon_script; declaring a
 # global class breaks the source-reload fallback on re-enable ("hides a global script class").
@@ -25,7 +26,9 @@ const CURSOR_BROADCAST_INTERVAL_SEC := 0.1
 const SHADER_EXTENSIONS := [".gdshader", ".gdshaderinc"]
 const SHADER_EXTENSIONS_LONG_FIRST := [".gdshaderinc", ".gdshader"]
 const SHADER_CANDIDATE_KEYS := ["path", "resource_path", "script_path", "file", "file_path"]
-const SHADER_CANDIDATE_SEPARATORS := [" ", "\t", "\n", "\r", "\"", "'", "(", ")", "[", "]", "{", "}", "<", ">", ",", ";"]
+const SHADER_CANDIDATE_SEPARATORS := [
+	" ", "\t", "\n", "\r", "\"", "'", "(", ")", "[", "]", "{", "}", "<", ">", ",", ";",
+]
 
 # ── References ───────────────────────────────────────────────────────
 var _editor_plugin: EditorPlugin
@@ -204,21 +207,27 @@ func _on_check_active_editor() -> void:
 			and _active_code_edit.is_visible_in_tree():
 		return
 
-	var script_editor := EditorInterface.get_script_editor()
-	if not script_editor:
+	var script_context := _find_script_editor_context()
+	if script_context.is_empty():
 		_disconnect_code_edit()
 		return
+	_switch_code_edit_context(script_context)
+
+
+## The script editor's current CodeEdit and script path, or {} when either is missing.
+func _find_script_editor_context() -> Dictionary:
+	var script_editor := EditorInterface.get_script_editor()
+	if not script_editor:
+		return {}
 
 	var current_editor := script_editor.get_current_editor()
 	if not current_editor:
-		_disconnect_code_edit()
-		return
+		return {}
 
 	# Get the CodeEdit from the current ScriptEditorBase
 	var code_edit := _find_code_edit(current_editor)
 	if not code_edit:
-		_disconnect_code_edit()
-		return
+		return {}
 
 	# Get the script resource path
 	var script_path := ""
@@ -227,13 +236,12 @@ func _on_check_active_editor() -> void:
 		script_path = current_script.resource_path
 
 	if script_path.is_empty():
-		_disconnect_code_edit()
-		return
+		return {}
 
-	_switch_code_edit_context({
+	return {
 		"code_edit": code_edit,
 		"path": script_path,
-	})
+	}
 
 
 ## Recursively search for the CodeEdit child inside a ScriptEditorBase.
@@ -298,49 +306,51 @@ func _find_shader_document_path(code_edit: CodeEdit) -> String:
 	var iid := code_edit.get_instance_id()
 	var cached_path := String(_code_edit_path_cache.get(iid, ""))
 	var code_text := code_edit.text
+
+	# Sources from the most to the least reliable; each runs only if the previous found nothing.
+	var found_path := _find_shader_path_from_editor_controls(code_edit, code_text)
+	if found_path.is_empty():
+		found_path = _find_shader_path_from_selected_files(code_text)
+	if found_path.is_empty():
+		found_path = _find_shader_path_by_file_content(code_text)
+	if found_path.is_empty():
+		found_path = _find_shader_path_in_scene(code_text)
+	if not found_path.is_empty():
+		_code_edit_path_cache[iid] = found_path
+		return found_path
+	if _is_shader_document_path(cached_path):
+		return cached_path
+	return ""
+
+
+## Shader path whose code matches code_text among the selected nodes, then the
+## whole edited scene. Empty when no match, or several loose ones.
+func _find_shader_path_in_scene(code_text: String) -> String:
 	var exact_matches: Array[String] = []
 	var loose_matches: Array[String] = []
-
-	var editor_path := _find_shader_path_from_editor_controls(code_edit, code_text)
-	if not editor_path.is_empty():
-		_code_edit_path_cache[iid] = editor_path
-		return editor_path
-
-	var selected_file_path := _find_shader_path_from_selected_files(code_text)
-	if not selected_file_path.is_empty():
-		_code_edit_path_cache[iid] = selected_file_path
-		return selected_file_path
-
-	var matching_file_path := _find_shader_path_by_file_content(code_text)
-	if not matching_file_path.is_empty():
-		_code_edit_path_cache[iid] = matching_file_path
-		return matching_file_path
 
 	var selection := EditorInterface.get_selection()
 	if selection:
 		for node in selection.get_selected_nodes():
 			_collect_shader_paths_from_node(node, code_text, exact_matches, loose_matches)
-		if not exact_matches.is_empty():
-			_code_edit_path_cache[iid] = exact_matches[0]
-			return exact_matches[0]
-		if loose_matches.size() == 1:
-			_code_edit_path_cache[iid] = loose_matches[0]
-			return loose_matches[0]
+		var selected_path := _pick_shader_match(exact_matches, loose_matches)
+		if not selected_path.is_empty():
+			return selected_path
 
 	var root := EditorInterface.get_edited_scene_root()
 	if root:
 		_collect_shader_paths_from_node(root, code_text, exact_matches, loose_matches)
 		for child in root.get_children():
 			_collect_shader_paths_from_scene(child, root, code_text, exact_matches, loose_matches)
+	return _pick_shader_match(exact_matches, loose_matches)
 
+
+## First exact match, else the only loose match, else "".
+func _pick_shader_match(exact_matches: Array[String], loose_matches: Array[String]) -> String:
 	if not exact_matches.is_empty():
-		_code_edit_path_cache[iid] = exact_matches[0]
 		return exact_matches[0]
 	if loose_matches.size() == 1:
-		_code_edit_path_cache[iid] = loose_matches[0]
 		return loose_matches[0]
-	if _is_shader_document_path(cached_path):
-		return cached_path
 	return ""
 
 
@@ -882,11 +892,11 @@ func apply_remote_op(op: Dictionary, script_path: String) -> void:
 	# fall back to a full text replacement so the editor always converges.
 	var expected_text: String = buf.get_text()
 	if _cached_text != expected_text:
-		var _fb_caret_line := _active_code_edit.get_caret_line()
-		var _fb_caret_col := _active_code_edit.get_caret_column()
+		var fb_caret_line := _active_code_edit.get_caret_line()
+		var fb_caret_col := _active_code_edit.get_caret_column()
 		_active_code_edit.text = expected_text
-		_active_code_edit.set_caret_line(mini(_fb_caret_line, _active_code_edit.get_line_count() - 1))
-		_active_code_edit.set_caret_column(_fb_caret_col)
+		_active_code_edit.set_caret_line(mini(fb_caret_line, _active_code_edit.get_line_count() - 1))
+		_active_code_edit.set_caret_column(fb_caret_col)
 		_cached_text = expected_text
 
 	_suppress = false
@@ -908,13 +918,13 @@ func _apply_surgical_insert(doc_index: int, ch: String) -> void:
 	if insert_line >= _active_code_edit.get_line_count():
 		var buf: RefCounted = _buffers.get(_active_script_path)
 		if buf:
-			var _bc_caret_line := _active_code_edit.get_caret_line()
-			var _bc_caret_col := _active_code_edit.get_caret_column()
-			var _bc_text: String = buf.get_text()
-			_active_code_edit.text = _bc_text
-			_active_code_edit.set_caret_line(mini(_bc_caret_line, _active_code_edit.get_line_count() - 1))
-			_active_code_edit.set_caret_column(_bc_caret_col)
-			_cached_text = _bc_text
+			var bc_caret_line := _active_code_edit.get_caret_line()
+			var bc_caret_col := _active_code_edit.get_caret_column()
+			var bc_text: String = buf.get_text()
+			_active_code_edit.text = bc_text
+			_active_code_edit.set_caret_line(mini(bc_caret_line, _active_code_edit.get_line_count() - 1))
+			_active_code_edit.set_caret_column(bc_caret_col)
+			_cached_text = bc_text
 		return
 
 	# Save local caret state (to adjust AFTER the background edit)
@@ -971,13 +981,13 @@ func _apply_surgical_delete(doc_index: int) -> void:
 		# Desync: fall back to full text replacement from CRDT buffer
 		var buf: RefCounted = _buffers.get(_active_script_path)
 		if buf:
-			var _sd_caret_line := _active_code_edit.get_caret_line()
-			var _sd_caret_col := _active_code_edit.get_caret_column()
-			var _sd_text: String = buf.get_text()
-			_active_code_edit.text = _sd_text
-			_active_code_edit.set_caret_line(mini(_sd_caret_line, _active_code_edit.get_line_count() - 1))
-			_active_code_edit.set_caret_column(_sd_caret_col)
-			_cached_text = _sd_text
+			var sd_caret_line := _active_code_edit.get_caret_line()
+			var sd_caret_col := _active_code_edit.get_caret_column()
+			var sd_text: String = buf.get_text()
+			_active_code_edit.text = sd_text
+			_active_code_edit.set_caret_line(mini(sd_caret_line, _active_code_edit.get_line_count() - 1))
+			_active_code_edit.set_caret_column(sd_caret_col)
+			_cached_text = sd_text
 		else:
 			_cached_text = _active_code_edit.text
 		return
@@ -992,13 +1002,13 @@ func _apply_surgical_delete(doc_index: int) -> void:
 	if del_line >= _active_code_edit.get_line_count():
 		var buf: RefCounted = _buffers.get(_active_script_path)
 		if buf:
-			var _dc_caret_line := _active_code_edit.get_caret_line()
-			var _dc_caret_col := _active_code_edit.get_caret_column()
-			var _dc_text: String = buf.get_text()
-			_active_code_edit.text = _dc_text
-			_active_code_edit.set_caret_line(mini(_dc_caret_line, _active_code_edit.get_line_count() - 1))
-			_active_code_edit.set_caret_column(_dc_caret_col)
-			_cached_text = _dc_text
+			var dc_caret_line := _active_code_edit.get_caret_line()
+			var dc_caret_col := _active_code_edit.get_caret_column()
+			var dc_text: String = buf.get_text()
+			_active_code_edit.text = dc_text
+			_active_code_edit.set_caret_line(mini(dc_caret_line, _active_code_edit.get_line_count() - 1))
+			_active_code_edit.set_caret_column(dc_caret_col)
+			_cached_text = dc_text
 		return
 
 	# Determine end position (handles newline spanning two lines)
