@@ -1,13 +1,14 @@
 @tool
-class_name GhostCursorOverlay
+# No global class_name: loaded by path via _instantiate_addon_script; declaring a
+# global class breaks the source-reload fallback on re-enable ("hides a global script class").
 extends Control
 ## Draws colored cursor indicators for connected peers, overlaid on
 ## the active CodeEdit. Each peer gets a unique color and a small
-## label showing their abbreviated peer ID.
+## label showing their chosen display name.
 
 const TAG := "GhostCursorOverlay"
 const CURSOR_WIDTH := 2
-const LABEL_OFFSET := Vector2(4, -16)
+const LABEL_OFFSET := Vector2(4, -28)
 const STALE_TIMEOUT_SEC := 10.0
 
 ## Peer color palette (8 distinct colors).
@@ -58,6 +59,7 @@ func detach() -> void:
 
 func update_peer_cursor(peer_id: String, data: Dictionary) -> void:
 	_peer_cursors[peer_id] = {
+		"peer_name": data.get("peer_name", ""),
 		"script_path": data.get("script_path", ""),
 		"line": data.get("line", 0),
 		"column": data.get("column", 0),
@@ -84,6 +86,7 @@ func _draw() -> void:
 	var to_remove: Array[String] = []
 	var font: Font = _code_edit.get_theme_font("font", "CodeEdit")
 	var font_size: int = _code_edit.get_theme_font_size("font_size", "CodeEdit")
+	var label_font_size := mini(font_size * 2, 20)
 
 	for peer_id in _peer_cursors:
 		var cursor_data: Dictionary = _peer_cursors[peer_id]
@@ -122,14 +125,18 @@ func _draw() -> void:
 		var cursor_bottom := Vector2(rect.position.x, rect.position.y + rect.size.y)
 		draw_line(cursor_top, cursor_bottom, color, CURSOR_WIDTH)
 
-		# Draw peer label (abbreviated ID)
+		# Draw peer label (display name when available)
 		var label_pos := cursor_top + LABEL_OFFSET
-		var short_id: String = peer_id.substr(peer_id.length() - 6) \
-			if peer_id.length() > 6 else peer_id
+		var label_text := String(cursor_data.get("peer_name", "")).strip_edges()
+		if label_text.is_empty():
+			label_text = peer_id.substr(peer_id.length() - 6) \
+				if peer_id.length() > 6 else peer_id
+		elif label_text.length() > 12:
+			label_text = label_text.substr(0, 9) + "..."
 		if font:
 			draw_string(
-				font, label_pos, short_id,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, mini(font_size, 10), color)
+				font, label_pos, label_text,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, label_font_size, color)
 
 	for pid in to_remove:
 		_peer_cursors.erase(pid)

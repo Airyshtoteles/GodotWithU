@@ -1,0 +1,16 @@
+{
+  "name": "godot-with-u-ws-relay",
+  "private": true,
+  "version": "0.8.0",
+  "description": "WebSocket relay server for GodotWithU.",
+  "main": "ws_relay_server.js",
+  "scripts": {
+    "start": "node ws_relay_server.js --auth none",
+    "start:open": "node ws_relay_server.js --auth none",
+    "start:password": "node ws_relay_server.js --auth password",
+    "start:backend": "node ws_relay_server.js --auth backend"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

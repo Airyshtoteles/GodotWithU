@@ -22,3 +22,7 @@ bin/
 *.obj
 *.o
 *.pck
+
+# Relay server
+node_modules/
+ws_server/package-lock.json
