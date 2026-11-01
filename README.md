@@ -1,7 +1,8 @@
 # GodotWithU
 
-**GodotWithU** is a lightweight, pure GDScript real-time collaboration plugin for the Godot Engine (v4+).
-It allows multiple developers to work on the same Godot project simultaneously over a local network or VPN, similar to Unreal Engine's Multi-User Editing.
+Real-time collaboration for the Godot editor. Several editors, native or web,
+share one session: scene edits, GDScript co-editing, cursors, node locks and
+new files all travel between them.
 
 ## Demo
 
@@ -9,54 +10,107 @@ It allows multiple developers to work on the same Godot project simultaneously o
 
 ## Features
 
-- **Real-Time Scene Sync**: Instantly replicate node additions, deletions, translations, and property changes across all connected Godot editors.
-- **CRDT Script Sync**: Collaborative coding with Conflict-free Replicated Data Types (Logoot). Edit the same `.gd` file simultaneously, Google Docs style.
-- **Node Locking**: When a remote peer selects a node, it becomes locked (shown with a lock icon in the scene tree) to prevent conflicting edits. Locks auto-expire after 30 seconds of inactivity.
-- **Pure GDScript Networking**: Uses Godot's built-in `ENetMultiplayerPeer` independently from the SceneTree API. No C++ GDExtension compilation required.
-- **Host & Join Workflow**: One editor acts as the Host/Relay Server, and others join as Clients via configurable IP and Port.
-- **Action Interception**: Transparently hooks into Godot's `EditorUndoRedoManager` to broadcast your edits.
-- **Initial State Sync**: When a new peer joins, the host automatically sends the full scene state and all CRDT script buffers so the joiner is immediately up to date.
+- **ENet transport**: direct peer-to-peer hosting for native editors on a LAN or VPN.
+- **WebSocket relay**: works from web (WASM) editors, through a relay you host or a hosted one.
+- **Scene sync**: node additions, deletions, renames, reorders and property changes.
+- **Script sync (CRDT)**: conflict-free real-time co-editing of GDScript files.
+- **Ghost cursors**: see where every peer's cursor is in the script editor.
+- **Node locking**: a node someone has selected cannot be edited by others.
+- **File sync**: new and deleted `.tscn`, `.tres`, `.gd` and shader files reach every peer.
 
 ## Installation
 
-1. Download the latest release from the [Releases tab](../../releases) or clone this repository.
-2. Copy the `addons/godot_with_u` folder into your Godot project's `addons/` directory.
-3. Open your Godot Project.
-4. Go to **Project -> Project Settings -> Plugins** and enable **GodotWithU**.
+1. Download the latest release from the [Releases tab](../../releases) or clone
+   this repository, then copy the `addons/godot_with_u` folder into the
+   `addons/` folder of your Godot project.
+2. Enable the plugin in **Project > Project Settings > Plugins**.
+3. The **GodotWithU** dock appears on the right side of the editor.
 
-## How to Use
+## Usage
 
-### Starting a Session (Host)
-1. In the Godot Editor, look for the **GodotWithU** dock panel (usually on the top right).
-2. Leave the Port as default (e.g., `7654`) or change it if necessary.
-3. Click **Host**. Your editor is now broadcasting changes and waiting for peers.
+### WebSocket relay (web editors, or peers on different networks)
 
-### Joining a Session (Client)
-1. Another developer opens the same project on their machine (or another Godot instance on your machine locally).
-2. In the GodotWithU dock, enter the **IP address** of the host machine (defaults to `127.0.0.1` for local testing).
-3. Set the **Port** to match the host.
-4. Click **Join**.
+1. Set **Transport** to `WebSocket relay`.
+2. Enter the relay's address in **URL**: your own relay (see below) or a hosted one.
+3. Enter a shared **Room** name. Everyone in the same room works together.
+4. Every peer clicks **Join**. The first one into a room coordinates it. If it
+   leaves, the relay hands that role to a peer that stayed, so the session goes on.
 
-Once connected, any changes made to the 3D/2D Scene or Scripts will mirror instantly!
+The dock only asks for what the relay requires. The relay tells it the first
+time you join, and the dock remembers it for that URL:
 
-## Architecture
+| Relay mode | What the dock asks for |
+|------------|------------------------|
+| `none`     | nothing |
+| `password` | the relay password |
+| `backend`  | a Godot Manager login (API token, or email and password). The room is then one of your projects |
 
-Instead of relying on heavy C++ implementations or modifying the main `SceneTree.multiplayer`, GodotWithU utilizes an independent `NetworkManager` running an `ENetMultiplayerPeer`. The plugin actively polls for messages every `0.05` seconds and serializes intercepted Godot actions into binary packets, broadcasting them reliably across peers.
+When a relay refuses you, the dock says why and shows the missing field. Fill
+it in and click **Join** again.
 
-### Conflict Resolution Strategy
+The default URL is the hosted Godot Manager relay
+(`wss://synchro.godaas.org/ws-relay`), which authenticates against `https://studio.godaas.org`. Replace it
+with your relay's URL to use your own.
 
-| Layer | Strategy | Details |
-|-------|----------|---------|
-| **Script Editing** | CRDT (Logoot) | Each character has a unique, mathematically sortable position ID. Concurrent inserts at the same location are resolved deterministically by comparing site IDs. No coordination needed. |
-| **Node Selection** | Locking | When a remote peer selects a node, it is locked for that peer. Other peers cannot modify or delete locked nodes. Locks auto-release when the peer changes selection, disconnects, or after a 30-second timeout. |
-| **Property Changes** | Last-Write-Wins | Simultaneous property changes to the same node use last-write-wins ordering based on receive order. The locking system prevents most simultaneous edits to the same node. |
-| **Node Add/Delete** | Idempotent | Duplicate `node_add` actions are ignored if the node already exists. Delete actions silently succeed if the node is already gone. |
+### ENet (native editors, LAN or VPN)
 
-### Security
+1. Set **Transport** to `ENet (native)`.
+2. One editor clicks **Host** and shares its IP address.
+3. The others enter that IP and click **Join**.
 
-- Remote node instantiation is validated against a whitelist of safe Godot node types.
-- Packet size is limited to 8 MB to prevent memory exhaustion.
-- Peer IDs use SHA-256 derived identifiers to minimize collision risk.
+ENet has no relay and no authentication: anyone who can reach the host's port
+can join.
+
+## Running your own relay
+
+The relay lives in `ws_server/`. It is a small Node.js process:
+
+```sh
+cd ws_server
+npm install
+npm start
+```
+
+It listens on `0.0.0.0:7655` (change it with the `PORT` and `HOST` environment
+variables). In the dock, use `ws://<relay address>:7655/`, or `wss://` behind a
+TLS reverse proxy. Any path is accepted, so the proxy can mount the relay
+wherever suits you.
+
+### Choosing who may join
+
+`npm start` starts the relay **without authentication**: anyone who knows the
+URL and a room name can join. To protect it, pick another mode:
+
+| Start command | Mode | Each peer needs |
+|---------------|------|-----------------|
+| `npm start` | `none` | nothing |
+| `RELAY_PASSWORD=<secret> npm run start:password` | `password` | the shared password |
+| `BACKEND_BASE_URL=https://<your manager> npm run start:backend` | `backend` | a Godot Manager account that can open the room's project |
+
+The mode can also be set with the `RELAY_AUTH` environment variable
+(`none`, `password` or `backend`). The `--auth` option wins over it. Started as
+plain `node ws_relay_server.js` with neither, the relay uses `backend`, so a
+relay launched by hand without configuration is never open.
+
+For the password mode:
+
+- Use a long random password, for example the output of `openssl rand -base64 18`.
+- Put the relay behind TLS and give peers a `wss://` URL: the password travels
+  in the join message.
+- A wrong password is answered after one second, which slows down guessing.
+
+## Privacy
+
+The addon only contacts a Godot Manager server once you log in to one in the
+dock. Your login token is only sent to a relay on that server's host, on
+your own machine, or to `wss://synchro.godaas.org/ws-relay` when you log in
+to `https://studio.godaas.org`. Without a login, the only server the addon talks to is the
+relay you join.
+
+## Compatibility
+
+Godot 4.4 or later (tested on 4.4.1 and 4.6). Godot 4.3 is not supported: the
+plugin uses `EditorToaster`, added in 4.4.
 
 ## Contributing
 
