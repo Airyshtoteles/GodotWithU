@@ -1,5 +1,6 @@
 @tool
-class_name CRDTTextBuffer
+# No global class_name: loaded by path (preloaded as CRDTTextBufferClass); declaring a
+# global class breaks the source-reload fallback on re-enable ("hides a global script class").
 extends RefCounted
 ## A Logoot-style CRDT text buffer using fractional indexing.
 ##
